@@ -96,7 +96,7 @@
         </div>
     </div>
 
-    <div id="app" v-cloak class="h-full flex flex-col md:flex-row relative"
+    <div id="app" v-if="appReady" v-cloak class="h-full flex flex-col md:flex-row relative"
         :class="{ 'app-native-fullscreen': isChatFullscreen, 'mobile-keyboard-active': isMobileKeyboardOpen }">
         <component is="style" v-if="settings.fontSize">
             .markdown-body :not(h1):not(h2):not(h3):not(h4):not(h5):not(h6):not(small):not(sub):not(sup):not(code) {
@@ -4848,9 +4848,12 @@
     </div>
 
     <script>
+        document.write('<script src="assets/js/data-loader.js?v=' + new Date().getTime() + '"><\/script>');
         document.write('<script src="assets/js/utils.js?v=' + new Date().getTime() + '"><\/script>');
         document.write('<script src="assets/js/card-utils.js?v=' + new Date().getTime() + '"><\/script>');
         document.write('<script src="assets/js/ui-select.js?v=' + new Date().getTime() + '"><\/script>');
+        document.write('<script src="assets/js/storage_service.js?v=' + new Date().getTime() + '"><\/script>');
+        document.write('<script src="assets/js/ui_renderer.js?v=' + new Date().getTime() + '"><\/script>');
         document.write('<script src="assets/js/app.js?v=' + new Date().getTime() + '"><\/script>');
     </script>
 </body>

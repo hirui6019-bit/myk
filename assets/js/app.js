@@ -495,35 +495,14 @@ createApp({
 
         };
 
-        const scheduleMobileVisualViewportSync = (options = {}) => {
-            if (mobileViewportRaf) cancelAnimationFrame(mobileViewportRaf);
-            mobileViewportRaf = requestAnimationFrame(() => {
-                mobileViewportRaf = null;
-                syncMobileVisualViewport(options);
-            });
-        };
+        const scheduleMobileVisualViewportSync = (options = {}) => uiManager.scheduleMobileViewportSync(options);
 
-        const handleChatInputFocus = () => {
-            if (!isMobileViewport()) return;
-            clearTimeout(mobileKeyboardBlurTimer);
-            isMobileKeyboardOpen.value = true;
-            scheduleMobileVisualViewportSync({ force: true });
-        };
+        const handleChatInputFocus = () => uiManager.handleChatInputFocus();
 
-        const handleChatInputBlur = () => {
-            clearTimeout(mobileKeyboardBlurTimer);
-            mobileKeyboardBlurTimer = setTimeout(() => {
-                isMobileKeyboardOpen.value = false;
-                scheduleMobileVisualViewportSync({ force: true });
-            }, 180);
-        };
+        const handleChatInputBlur = () => uiManager.handleChatInputBlur();
 
-        const handleMobileViewportResize = () => scheduleMobileVisualViewportSync();
-        const handleMobileOrientationChange = () => {
-            lastAppliedMobileBackgroundHeight = 0;
-            document.documentElement.style.removeProperty('--chat-bg-height');
-            scheduleMobileVisualViewportSync({ force: true });
-        };
+        const handleMobileViewportResize = () => uiManager.handleMobileViewportResize();
+        const handleMobileOrientationChange = () => uiManager.handleMobileOrientationChange();
 
         // Service Status
         const apiStatus = ref('unknown'); // 'unknown', 'checking', 'connected', 'error'
@@ -779,6 +758,10 @@ createApp({
         const chatRenderLimit = ref(CHAT_RENDER_INITIAL_LIMIT);
         let isLoadingEarlierChatMessages = false;
         let isChatTopUnlockArmed = true;
+        let uiManager = null;
+        const uiContext = {};
+        let storageService = null;
+        const appReady = ref(false);
         const lastActiveCharacterId = ref(null); // For persistence
         function hasActiveToolContinuationWork() {
             return !!(activeToolContinuationPending.value || (
@@ -1521,7 +1504,7 @@ createApp({
                 vectorLexicalTerms,
                 vectorSearchScore,
                 ...cleanMemory
-            } = unwrapForStorage(memory);
+            } = storageService.unwrapProxy(memory);
 
             if (typeof cleanMemory.embeddingQ === 'string' && cleanMemory.embeddingQ.length > 0) {
                 return cleanMemory;
@@ -1711,287 +1694,24 @@ createApp({
             }
         });
 
-
-        // --- Persistence (IndexedDB) ---
-        const dbName = 'RPHubDB';
-        const legacyDbName = String.fromCharCode(83, 105, 108, 108, 121, 84, 97, 118, 101, 114, 110, 68, 66);
-        const storagePrefix = 'rp_hub_';
-        const legacyStoragePrefix = String.fromCharCode(115, 105, 108, 108, 121, 95, 116, 97, 118, 101, 114, 110, 95);
-        const dbVersion = 1;
-        let db = null;
-        let legacyDb = null;
-
-        const openAppDB = (name) => {
-            return new Promise((resolve, reject) => {
-                const request = indexedDB.open(name, dbVersion);
-                request.onerror = (event) => reject('DB Error: ' + event.target.error);
-                request.onsuccess = (event) => {
-                    resolve(event.target.result);
-                };
-                request.onupgradeneeded = (event) => {
-                    const db = event.target.result;
-                    if (!db.objectStoreNames.contains('store')) {
-                        db.createObjectStore('store');
-                    }
-                };
-            });
-        };
-
-        const initDB = async () => {
-            db = await openAppDB(dbName);
-            try {
-                const dbList = typeof indexedDB.databases === 'function' ? await indexedDB.databases() : null;
-                const shouldOpenLegacy = !dbList || dbList.some(item => item && item.name === legacyDbName);
-                if (shouldOpenLegacy) {
-                    legacyDb = await openAppDB(legacyDbName);
-                }
-            } catch (e) {
-                console.warn('Legacy DB check failed:', e);
-            }
-            return db;
-        };
-
-        const isDatabaseClosingError = (error) => {
-            const message = String(error?.message || error || '');
-            return /connection is closing|database is closing|close pending/i.test(message);
-        };
-
-        const reopenMainDB = async () => {
-            try { if (db) db.close(); } catch (_) { }
-            db = await openAppDB(dbName);
-            return db;
-        };
-
-        const unwrapForStorage = (value, seen = new WeakMap()) => {
-            if (value === null || typeof value !== 'object') return value;
-
-            const raw = typeof Vue?.toRaw === 'function' ? Vue.toRaw(value) : value;
-            if (raw === null || typeof raw !== 'object') return raw;
-
-            if (seen.has(raw)) return seen.get(raw);
-            if (raw instanceof Date) return raw.toISOString();
-            if (ArrayBuffer.isView(raw)) return Array.from(raw);
-            if (raw instanceof ArrayBuffer) return Array.from(new Uint8Array(raw));
-
-            if (Array.isArray(raw)) {
-                const arr = [];
-                seen.set(raw, arr);
-                raw.forEach((item, index) => {
-                    const clonedItem = unwrapForStorage(item, seen);
-                    arr[index] = clonedItem === undefined ? null : clonedItem;
-                });
-                return arr;
-            }
-
-            const obj = {};
-            seen.set(raw, obj);
-            Object.keys(raw).forEach(key => {
-                const item = raw[key];
-                if (typeof item === 'function' || typeof item === 'undefined') return;
-                obj[key] = unwrapForStorage(item, seen);
-            });
-            return obj;
-        };
-
-        const cloneForStorage = (value) => {
-            const plainValue = unwrapForStorage(value);
-            if (typeof structuredClone === 'function') {
-                try {
-                    return structuredClone(plainValue);
-                } catch (_) { }
-            }
-            return JSON.parse(JSON.stringify(plainValue));
-        };
-
-        const storageKey = (name) => `${storagePrefix}${name}`;
-        const legacyStorageKey = (name) => `${legacyStoragePrefix}${name}`;
-        const scopedStorageKey = (name, id) => `${storageKey(name)}_${id}`;
-        const legacyScopedStorageKey = (name, id) => `${legacyStorageKey(name)}_${id}`;
-
-        const dbSetTo = (targetDb, key, value, options = {}) => {
-            return new Promise((resolve, reject) => {
-                if (!targetDb) return reject('DB not initialized');
-                const transaction = targetDb.transaction(['store'], 'readwrite');
-                const store = transaction.objectStore('store');
-                // Clone to plain object to avoid Proxy issues unless the caller already did it.
-                const request = store.put(options.clone === false ? value : cloneForStorage(value), key);
-                request.onsuccess = () => resolve();
-                request.onerror = (event) => reject(event.target.error);
-            });
-        };
-
-        const dbSet = async (key, value, options = {}) => {
-            try {
-                return await dbSetTo(db, key, value, options);
-            } catch (error) {
-                if (!isDatabaseClosingError(error)) throw error;
-                await reopenMainDB();
-                return dbSetTo(db, key, value, options);
-            }
-        };
-
-        const dbGetFrom = (targetDb, key) => {
-            return new Promise((resolve, reject) => {
-                if (!targetDb) return resolve(undefined);
-                const transaction = targetDb.transaction(['store'], 'readonly');
-                const store = transaction.objectStore('store');
-                const request = store.get(key);
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = (event) => reject(event.target.error);
-            });
-        };
-
-        const dbGet = async (key) => {
-            try {
-                return await dbGetFrom(db, key);
-            } catch (error) {
-                if (!isDatabaseClosingError(error)) throw error;
-                await reopenMainDB();
-                return dbGetFrom(db, key);
-            }
-        };
-
-        const dbGetWithLegacy = async (key, oldKey = null) => {
-            const value = await dbGet(key);
-            if (value !== undefined) return value;
-            if (!oldKey || !legacyDb) return undefined;
-            const legacyValue = await dbGetFrom(legacyDb, oldKey);
-            if (legacyValue !== undefined) {
-                await dbSet(key, legacyValue);
-            }
-            return legacyValue;
-        };
-
-        const setStoredValue = (name, value, options = {}) => dbSet(storageKey(name), value, options);
-        const getStoredValue = (name) => dbGetWithLegacy(storageKey(name), legacyStorageKey(name));
-        const setScopedStoredValue = (name, id, value, options = {}) => dbSet(scopedStorageKey(name, id), value, options);
-        const getScopedStoredValue = (name, id) => dbGetWithLegacy(scopedStorageKey(name, id), legacyScopedStorageKey(name, id));
-        let chatHistorySaveTimer = null;
-
-        const saveChatHistoryNow = async () => {
-            if (chatHistorySaveTimer) {
-                clearTimeout(chatHistorySaveTimer);
-                chatHistorySaveTimer = null;
-            }
-            if (currentCharacterIndex.value < 0 || !currentCharacter.value || !currentCharacter.value.uuid) return;
-
-            try {
-                const historyToSave = cloneForStorage(chatHistory.value);
-                await setScopedStoredValue('chat', currentCharacter.value.uuid, historyToSave, { clone: false });
-            } catch (e) {
-                console.error('Failed to save chat history:', e);
-            }
-        };
-
-        const scheduleChatHistorySave = () => {
-            if (chatHistorySaveTimer) clearTimeout(chatHistorySaveTimer);
-            const delay = (isGenerating.value || isRemoteGenerating.value) ? 1500 : 300;
-            chatHistorySaveTimer = setTimeout(() => {
-                chatHistorySaveTimer = null;
-                saveChatHistoryNow();
-            }, delay);
-        };
-
-        const flushPendingChatHistorySave = async () => {
-            if (!chatHistorySaveTimer) return;
-            await saveChatHistoryNow();
-        };
-
-        const saveMemorySettingsNow = async () => {
-            if (!_initComplete) return;
-            if (!db) await initDB();
-            await setStoredValue('memory_settings', cloneForStorage(memorySettings), { clone: false });
-        };
-
-        const saveMemoriesNow = async () => {
-            if (!_memoriesLoaded || !currentCharacter.value?.uuid) return;
-            if (!db) await initDB();
-            await setScopedStoredValue('memories', currentCharacter.value.uuid, await compactMemoriesForStorageAsync(memories.value), { clone: false });
-        };
-
-        const saveWorldInfoStateNow = async () => {
-            if (!db) await initDB();
-            await setStoredValue('characters', characters.value);
-            await setStoredValue('worldinfo', worldInfo.value);
-            await setStoredValue('global_worldinfo', globalWorldInfo.value);
-        };
-
-        const saveData = async (options = {}) => {
-            const { saveMemories = true } = options;
-            try {
-                if (!db) await initDB();
-                settings.contextSize = MAX_CONTEXT_SIZE;
-                normalizeActiveToolAggressivenessSettings();
-                await setStoredValue('characters', characters.value);
-                await setStoredValue('settings', settings);
-                await setStoredValue('presets', presets.value);
-                await setStoredValue('regex', regexScripts.value);
-                await setStoredValue('global_regex', globalRegexScripts.value);
-                await setStoredValue('worldinfo', worldInfo.value);
-                await setStoredValue('global_worldinfo', globalWorldInfo.value);
-                await setStoredValue('worldinfo_settings', worldInfoSettings);
-                await setStoredValue('global_ui_templates', globalUiTemplates.value);
-                await setStoredValue('active_tools', normalizeActiveTools(), { clone: false });
-                // await setStoredValue('recent_times', recentGenerationTimes.value); // Deprecated: Saved in character
-
-                // 守卫：初始化完成前不写入用户/记忆数据，防止默认值覆盖服务端已有数据
-                if (_initComplete) {
-                    await setStoredValue('user', user);
-                    await setStoredValue('user_profiles', JSON.parse(JSON.stringify(userProfiles.value)));
-                    if (activeProfileId.value) await setStoredValue('active_profile_id', activeProfileId.value);
-                }
-
-                // Save Chat State
-                if (currentCharacterIndex.value >= 0) {
-                    await setStoredValue('last_active_char', currentCharacterIndex.value);
-                    await saveChatHistoryNow();
-                }
-
-                // Save Memory State
-                await saveMemorySettingsNow();
-                if (saveMemories) await saveMemoriesNow();
-            } catch (e) {
-                console.error('Save failed:', e);
-                if (e.name === 'QuotaExceededError') {
-                    showToast('存储空间不足，无法保存', 'error');
-                }
-            }
-        };
-
-        const saveConversationMutationNow = async ({ saveTemplateRuntime = false } = {}) => {
-            try {
-                if (!db) await initDB();
-                await saveChatHistoryNow();
-                await saveMemoriesNow();
-                if (saveTemplateRuntime) {
-                    await setStoredValue('characters', characters.value);
-                    await setStoredValue('global_ui_templates', globalUiTemplates.value);
-                }
-            } catch (e) {
-                console.error('Save conversation mutation failed:', e);
-            }
-        };
-
-        const dbDeleteFrom = (targetDb, key) => {
-            return new Promise((resolve, reject) => {
-                if (!targetDb) return resolve();
-                const transaction = targetDb.transaction(['store'], 'readwrite');
-                const store = transaction.objectStore('store');
-                const request = store.delete(key);
-                request.onsuccess = () => resolve();
-                request.onerror = (event) => reject(event.target.error);
-            });
-        };
-
-        const dbDelete = (key) => dbDeleteFrom(db, key);
-
-        const dbDeleteWithLegacy = async (key, oldKey = null) => {
-            await dbDelete(key);
-            if (oldKey && legacyDb) await dbDeleteFrom(legacyDb, oldKey);
-        };
-
-        const deleteScopedStoredValue = (name, id) => dbDeleteWithLegacy(scopedStorageKey(name, id), legacyScopedStorageKey(name, id));
-
+        // 兼容性包装函数：保持 app.js 内其他旧代码能继续调用
+        const setStoredValue = (name, value, options) => storageService.setGlobalValue(name, value, options);
+        const getStoredValue = (name) => storageService.getGlobalValue(name);
+        const setScopedStoredValue = (name, id, value, options) => storageService.setScopedValue(name, id, value, options);
+        const getScopedStoredValue = (name, id) => storageService.getScopedValue(name, id);
+        const deleteScopedStoredValue = (name, id) => storageService.deleteScopedValue(name, id);
+        const saveChatHistoryNow = () => storageService.saveChatHistoryImmediately();
+        const scheduleChatHistorySave = () => storageService.scheduleChatHistorySave();
+        const flushPendingChatHistorySave = () => storageService.flushPendingChatHistorySave();
+        const saveMemorySettingsNow = () => storageService.saveMemorySettings();
+        const saveMemoriesNow = () => storageService.saveMemories();
+        const saveWorldInfoStateNow = () => storageService.saveWorldInfoState();
+        const saveData = (options) => storageService.saveAll(options);
+        const saveConversationMutationNow = (options) => storageService.saveConversationMutation(options);
+        const loadData = () => storageService.loadAll();
+        const initDB = () => storageService.initialize();
+        const cloneForStorage = (value) => storageService.deepClone(value);
+        // =======================================================
         /* extracted generateUUID */
 
         // Auto-save memory settings when changed (debounced to avoid lag on slider drag)
@@ -1999,157 +1719,9 @@ createApp({
         watch(memorySettings, () => {
             clearTimeout(_memorySettingsSaveTimer);
             _memorySettingsSaveTimer = setTimeout(() => {
-                saveMemorySettingsNow().catch(e => console.error('Save memory settings failed:', e));
+                saveMemorySettingsNow().catch(e => console.error('保存记忆设置失败:', e));
             }, 500);
         }, { deep: true });
-
-        const loadData = async () => {
-            try {
-                await initDB();
-
-                // Load from DB
-                const savedChars = await getStoredValue('characters');
-                if (savedChars) {
-                    // Migration: Ensure all characters have a UUID and createdAt
-                    let migrated = false;
-                    characters.value = savedChars.filter(char => char).map((char, index) => {
-                        if (!char.uuid) {
-                            char.uuid = generateUUID();
-                            migrated = true;
-                            // Try to migrate old index-based chat history to UUID-based
-                            getScopedStoredValue('chat', index).then(oldChat => {
-                                if (oldChat) {
-                                    setScopedStoredValue('chat', char.uuid, oldChat);
-                                    deleteScopedStoredValue('chat', index); // Clean up old key
-                                }
-                            }).catch(() => { });
-                        }
-                        if (!char.createdAt) {
-                            // Use a slightly offset timestamp based on index to preserve some order for old cards
-                            char.createdAt = Date.now() - (savedChars.length - index) * 1000;
-                            migrated = true;
-                        }
-                        if (Array.isArray(char.worldInfo)) {
-                            char.worldInfo = char.worldInfo.map(normalizeWorldInfoEntry).filter(entry => entry.scope !== 'global');
-                        }
-                        if (Array.isArray(char.regexScripts)) {
-                            char.regexScripts = char.regexScripts.map(script => normalizeRegexScript(script, 'character')).filter(script => script.scope !== 'global');
-                        }
-                        char.uiTemplates = Array.isArray(char.uiTemplates) ? char.uiTemplates.map(template => normalizeUiTemplate({ ...template, scope: 'character' })) : [];
-                        return char;
-                    });
-                    if (migrated) {
-                        await setStoredValue('characters', characters.value);
-                        console.log('Migrated characters to UUID and timestamp system');
-                    }
-                }
-
-                const savedSettings = await getStoredValue('settings');
-                if (savedSettings) {
-                    Object.keys(savedSettings).forEach(key => {
-                        if (Object.prototype.hasOwnProperty.call(settings, key)) {
-                            settings[key] = savedSettings[key];
-                        }
-                    });
-                    if (!Object.prototype.hasOwnProperty.call(savedSettings, 'apiProviderId')) {
-                        const legacyProvider = getApiProviderByUrl(savedSettings.apiUrl);
-                        settings.apiProviderId = legacyProvider?.id || (savedSettings.apiUrl ? 'custom' : DEFAULT_API_PROVIDER_ID);
-                        if (!legacyProvider && savedSettings.apiUrl) settings.customApiUrl = savedSettings.apiUrl;
-                    }
-                    normalizeApiProviderSettings();
-                } else {
-                    normalizeApiProviderSettings();
-                }
-                if ((!savedSettings || Number(savedSettings.fontFamilyVersion || 0) < 4) && settings.fontFamily === 'serif') {
-                    settings.fontFamily = 'modern';
-                }
-                settings.fontFamily = normalizeFontFamily(settings.fontFamily);
-                settings.fontFamilyVersion = 4;
-                applyFontFamily(settings.fontFamily);
-                delete settings.renderLayerLimit;
-                settings.contextSize = MAX_CONTEXT_SIZE;
-                settings.stream = true;
-                normalizeActiveToolAggressivenessSettings();
-
-                const savedPresets = await getStoredValue('presets');
-                if (savedPresets) presets.value = savedPresets.map(normalizePreset);
-
-                const savedGlobalRegex = await getStoredValue('global_regex');
-                if (savedGlobalRegex) globalRegexScripts.value = savedGlobalRegex.map(script => normalizeRegexScript(script, 'global'));
-
-                const savedRegex = await getStoredValue('regex');
-                if (savedGlobalRegex) {
-                    regexScripts.value = JSON.parse(JSON.stringify(globalRegexScripts.value)).map(script => normalizeRegexScript(script, 'global'));
-                } else if (savedRegex) {
-                    regexScripts.value = savedRegex.map(script => normalizeRegexScript(script, 'character'));
-                }
-
-                const savedGlobalWI = await getStoredValue('global_worldinfo');
-                if (savedGlobalWI) globalWorldInfo.value = savedGlobalWI.map(entry => normalizeWorldInfoEntry({ ...entry, scope: 'global' }));
-
-                const savedWI = await getStoredValue('worldinfo');
-                if (savedGlobalWI) {
-                    worldInfo.value = JSON.parse(JSON.stringify(globalWorldInfo.value)).map(entry => normalizeWorldInfoEntry({ ...entry, scope: 'global' }));
-                } else if (savedWI) {
-                    worldInfo.value = savedWI.map(normalizeWorldInfoEntry);
-                }
-
-                const savedGlobalUiTemplates = await getStoredValue('global_ui_templates');
-                if (savedGlobalUiTemplates) globalUiTemplates.value = savedGlobalUiTemplates.map(template => normalizeUiTemplate({ ...template, scope: 'global' }));
-
-                const savedActiveTools = await getStoredValue('active_tools');
-                normalizeActiveTools(savedActiveTools || activeTools.value);
-
-                const savedWISettings = await getStoredValue('worldinfo_settings');
-                if (savedWISettings) {
-                    ['scanDepth', 'maxDepth'].forEach(key => {
-                        if (savedWISettings[key] !== undefined) worldInfoSettings[key] = savedWISettings[key];
-                    });
-                }
-
-                // const savedRecentTimes = await getStoredValue('recent_times'); // Deprecated
-                // if (savedRecentTimes) recentGenerationTimes.value = savedRecentTimes;
-
-                const savedUser = await getStoredValue('user');
-                if (savedUser) Object.assign(user, savedUser);
-                if (!user.uuid) user.uuid = generateUUID(); // Ensure UUID
-
-                const savedProfiles = await getStoredValue('user_profiles');
-                const savedActiveId = await getStoredValue('active_profile_id');
-
-                if (savedProfiles && savedProfiles.length > 0) {
-                    userProfiles.value = savedProfiles;
-                    activeProfileId.value = savedActiveId || savedProfiles[0].uuid;
-                    const activeProfile = userProfiles.value.find(p => p.uuid === activeProfileId.value);
-                    if (activeProfile) {
-                        Object.assign(user, activeProfile);
-                        if (!user.uuid) user.uuid = activeProfileId.value;
-                    }
-                } else {
-                    // Migrate single user to profiles
-                    const firstProfile = JSON.parse(JSON.stringify(user));
-                    if (!firstProfile.uuid) firstProfile.uuid = generateUUID();
-                    user.uuid = firstProfile.uuid;
-                    userProfiles.value = [firstProfile];
-                    activeProfileId.value = firstProfile.uuid;
-                }
-
-                // Load Last Active Character Index
-                const lastCharIndex = await getStoredValue('last_active_char');
-                if (lastCharIndex !== undefined) {
-                    lastActiveCharacterId.value = lastCharIndex;
-                }
-
-                // Load Memory Settings
-                const savedMemorySettings = await getStoredValue('memory_settings');
-                if (savedMemorySettings) Object.assign(memorySettings, savedMemorySettings);
-                normalizeMemorySettings();
-
-            } catch (e) {
-                console.error('Failed to load saved data', e);
-                showToast('加载保存的数据失败', 'error');
-            }
-        };
 
         // Watch user name to update default regex
         watch(() => user.name, (newName) => {
@@ -3183,78 +2755,19 @@ ${content}
             characterDisplayLimit.value += 8;
         };
 
-        const resetChatRenderWindow = () => {
-            chatRenderLimit.value = CHAT_RENDER_INITIAL_LIMIT;
-            isChatTopUnlockArmed = true;
-        };
+        const resetChatRenderWindow = () => uiManager.resetRenderingWindow();
 
-        const hiddenChatMessageCount = computed(() => Math.max(0, chatHistory.value.length - chatRenderLimit.value));
+        const hiddenChatMessageCount = computed(() => uiManager.computeHiddenMessageCount());
 
-        const displayedChatMessages = computed(() => {
-            const startIndex = Math.max(0, chatHistory.value.length - chatRenderLimit.value);
-            return chatHistory.value.slice(startIndex).map((msg, offset) => ({
-                msg,
-                index: startIndex + offset
-            }));
-        });
+        const displayedChatMessages = computed(() => uiManager.computeDisplayedMessages());
 
-        const getChatScrollAnchor = () => {
-            const container = chatContainer.value;
-            const elements = (messageElements.value || [])
-                .filter(el => el && el.dataset && el.dataset.chatIndex)
-                .sort((a, b) => Number(a.dataset.chatIndex) - Number(b.dataset.chatIndex));
-            if (!container || elements.length === 0) return null;
+        const getChatScrollAnchor = () => uiManager.getScrollAnchor();
 
-            const containerTop = container.getBoundingClientRect().top;
-            const anchorElement = elements.find(el => el.getBoundingClientRect().bottom >= containerTop + 8) || elements[0];
+        const restoreChatScrollAnchor = async (anchor) => uiManager.restoreScrollAnchor(anchor);
 
-            return {
-                index: anchorElement.dataset.chatIndex,
-                topOffset: anchorElement.getBoundingClientRect().top - containerTop
-            };
-        };
+        const loadEarlierChatMessages = async (batchSize = CHAT_RENDER_BATCH_SIZE) => uiManager.loadEarlierMessages(batchSize);
 
-        const restoreChatScrollAnchor = async (anchor) => {
-            const container = chatContainer.value;
-            if (!container || !anchor) return;
-
-            await nextTick();
-            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-
-            const anchorElement = container.querySelector(`[data-chat-index="${anchor.index}"]`);
-            if (!anchorElement) return;
-
-            const containerTop = container.getBoundingClientRect().top;
-            const newTopOffset = anchorElement.getBoundingClientRect().top - containerTop;
-            container.scrollTop += newTopOffset - anchor.topOffset;
-        };
-
-        const loadEarlierChatMessages = async (batchSize = CHAT_RENDER_BATCH_SIZE) => {
-            if (hiddenChatMessageCount.value <= 0 || isLoadingEarlierChatMessages) return;
-            isLoadingEarlierChatMessages = true;
-            const anchor = getChatScrollAnchor();
-
-            chatRenderLimit.value = Math.min(
-                chatHistory.value.length,
-                chatRenderLimit.value + batchSize
-            );
-
-            await restoreChatScrollAnchor(anchor);
-            isLoadingEarlierChatMessages = false;
-        };
-
-        const handleChatScroll = () => {
-            const container = chatContainer.value;
-            if (!container || hiddenChatMessageCount.value <= 0) return;
-            if (container.scrollTop > 160) {
-                isChatTopUnlockArmed = true;
-                return;
-            }
-            if (isChatTopUnlockArmed && container.scrollTop <= 80) {
-                isChatTopUnlockArmed = false;
-                loadEarlierChatMessages();
-            }
-        };
+        const handleChatScroll = () => uiManager.handleScroll();
 
         // Reset limit when search query changes
         watch(characterSearchQuery, () => {
@@ -3371,51 +2884,9 @@ ${content}
         /* extracted formatTimeAgo */
 
         // Navigation Methods
-        const scrollToPreviousMessage = () => {
-            const container = chatContainer.value;
-            if (!container || !messageElements.value) return;
+        const scrollToPreviousMessage = () => uiManager.scrollToPreviousMessage();
 
-            const scrollTop = container.scrollTop;
-            const headerOffset = 70; // Header height + padding
-            const epsilon = 5; // Tolerance
-
-            // Filter nulls, keep only assistant messages, and sort by DOM position
-            const elements = messageElements.value
-                .filter(el => el && el.dataset.role === 'assistant')
-                .sort((a, b) => a.offsetTop - b.offsetTop);
-
-            // Find the last element whose snap position is STRICTLY ABOVE the current scroll position
-            for (let i = elements.length - 1; i >= 0; i--) {
-                const snapPosition = elements[i].offsetTop - headerOffset;
-                if (snapPosition < scrollTop - epsilon) {
-                    container.scrollTo({ top: snapPosition, behavior: 'smooth' });
-                    return;
-                }
-            }
-        };
-
-        const scrollToNextMessage = () => {
-            const container = chatContainer.value;
-            if (!container || !messageElements.value) return;
-
-            const scrollTop = container.scrollTop;
-            const headerOffset = 70; // Header height + padding
-            const epsilon = 5; // Tolerance
-
-            // Filter nulls, keep only assistant messages, and sort by DOM position
-            const elements = messageElements.value
-                .filter(el => el && el.dataset.role === 'assistant')
-                .sort((a, b) => a.offsetTop - b.offsetTop);
-
-            // Find the first element whose snap position is STRICTLY BELOW the current scroll position
-            for (let i = 0; i < elements.length; i++) {
-                const snapPosition = elements[i].offsetTop - headerOffset;
-                if (snapPosition > scrollTop + epsilon) {
-                    container.scrollTo({ top: snapPosition, behavior: 'smooth' });
-                    return;
-                }
-            }
-        };
+        const scrollToNextMessage = () => uiManager.scrollToNextMessage();
 
         // Toast Notification
         const showToast = (message, type = 'info', duration = 2000) => {
@@ -4198,15 +3669,7 @@ ${content}
             await generateResponse(startTime);
         };
 
-        const scrollToBottom = () => {
-            if (chatContainer.value && settings.autoScroll) {
-                if (chatHistory.value.length > 1) {
-                    chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
-                } else {
-                    chatContainer.value.scrollTop = 0;
-                }
-            }
-        };
+        const scrollToBottom = () => uiManager.scrollToBottom();
 
         const clearChat = () => {
             confirmAction('确定要清空聊天记录吗？记忆也将一并清空，此操作无法撤销。', () => {
@@ -4261,9 +3724,7 @@ ${content}
             }
         };
 
-        const syncChatFullscreenState = () => {
-            isChatFullscreen.value = !!getNativeFullscreenElement();
-        };
+        const syncChatFullscreenState = () => uiManager.syncFullscreenState();
 
         const copyMessage = (content) => {
             navigator.clipboard.writeText(content).then(() => {
@@ -9237,156 +8698,9 @@ image###生成的提示词###
             fetchQuota();
         });
 
-        const prepareLoadedChatHistoryForDisplay = (messages = []) => messages
-            .filter(msg => msg !== null && msg !== undefined)
-            .map(msg => {
-                if (msg.isSelf === undefined) {
-                    msg.isSelf = msg.role === 'user';
-                }
-                if (msg.role === 'user' || msg.role === 'assistant') {
-                    delete msg.skipReveal;
-                    msg.shouldAnimate = true;
-                }
-                if (msg.role === 'assistant' && msg.isSummaryOpen === undefined && hasThinkingOrTools(msg)) {
-                    msg.isSummaryOpen = false;
-                }
-                return msg;
-            });
+        const prepareLoadedChatHistoryForDisplay = (messages = []) => uiManager.prepareChatHistoryForDisplay(messages);
 
-        const selectCharacter = async (index, isNewImport = false) => {
-            if (isConversationBusy.value) {
-                stopGeneration();
-                const stopped = await waitForConversationIdle();
-                await saveChatHistoryNow();
-                if (!stopped) {
-                    showToast('正在停止生成，请稍后再切换角色卡', 'warning');
-                    return;
-                }
-            }
-            await flushPendingChatHistorySave();
-            abortUiTemplateUpdate();
-            _isApplyingCharacterScopedData = true;
-            const previousCharacterIndex = currentCharacterIndex.value;
-            const previousCharacter = currentCharacter.value;
-            if (previousCharacterIndex !== -1 && previousCharacterIndex !== index) {
-                saveGlobalUiTemplateRuntimeForCharacter(previousCharacter);
-            }
-            currentCharacterIndex.value = index;
-            resetChatRenderWindow();
-            const char = characters.value[index];
-            char.uiTemplates = Array.isArray(char.uiTemplates) ? char.uiTemplates.map(template => normalizeUiTemplate({ ...template, scope: 'character' })) : [];
-            if (previousCharacterIndex !== index) {
-                loadGlobalUiTemplateRuntimeForCharacter(char);
-            }
-
-            // Ensure UUID exists (double check)
-            if (!char.uuid) {
-                char.uuid = generateUUID();
-                saveData();
-            }
-
-            // Try to load saved chat history for this character
-            try {
-                const savedChat = await getScopedStoredValue('chat', char.uuid);
-                if (savedChat && savedChat.length > 0) {
-                    chatHistory.value = prepareLoadedChatHistoryForDisplay(savedChat);
-                } else {
-                    chatHistory.value = [];
-                    if (char.first_mes) {
-                        chatHistory.value.push({
-                            role: 'assistant',
-                            name: char.name,
-                            content: char.first_mes
-                        });
-                    }
-                }
-            } catch (e) {
-                console.error('Error loading chat history:', e);
-                chatHistory.value = [];
-            }
-
-            // Load Character Specific Data
-            const characterWorldInfo = Array.isArray(char.worldInfo)
-                ? JSON.parse(JSON.stringify(char.worldInfo)).map(entry => normalizeWorldInfoEntry({ ...entry, scope: 'character' })).filter(entry => entry.scope !== 'global')
-                : [];
-            worldInfo.value = [
-                ...JSON.parse(JSON.stringify(globalWorldInfo.value)).map(entry => normalizeWorldInfoEntry({ ...entry, scope: 'global' })),
-                ...characterWorldInfo
-            ];
-
-            combineRegexScriptsForCharacter(char);
-            finishApplyingCharacterScopedData();
-
-            if (char.recentGenerationTimes) {
-                recentGenerationTimes.value = JSON.parse(JSON.stringify(char.recentGenerationTimes));
-            } else {
-                recentGenerationTimes.value = [];
-            }
-
-            // Ensure default {{user}} replacement regex exists
-            const defaultRegexName = 'Auto Replace {{user}}';
-            const hasDefaultRegex = regexScripts.value.some(r => r.name === defaultRegexName);
-
-            if (!hasDefaultRegex) {
-                regexScripts.value.push({
-                    name: defaultRegexName,
-                    regex: '{{user}}',
-                    flags: 'gi',
-                    replacement: user.name,
-                    placement: [1, 2],
-                    markdownOnly: false,
-                    promptOnly: false,
-                    scope: 'global',
-                    enabled: true
-                });
-            } else {
-                // Update replacement with current username and ensure enabled
-                const script = regexScripts.value.find(r => r.name === defaultRegexName);
-                if (script) {
-                    script.replacement = user.name;
-                    script.enabled = true;
-                    script.scope = 'global';
-                    if (!script.placement) script.placement = [1, 2];
-                }
-            }
-
-
-
-            // Enforce special rules (Nai画图正则 & 自动生图)
-            enforceSpecialRules();
-
-            // Sync image style rules
-            if (isAutoImageGenEnabled.value) {
-                const messages = updateImageGenRegexState({ enableRegex: true });
-                if (messages && messages.length > 0) {
-                    showToast('已同步生图风格：' + messages.join('，'), 'success');
-                }
-            }
-
-            // Load Character Memories
-            try {
-                const savedMemories = await getScopedStoredValue('memories', char.uuid);
-                if (savedMemories && savedMemories.length > 0) {
-                    memories.value = prepareMemoriesForRuntime(savedMemories);
-                } else {
-                    memories.value = [];
-                }
-            } catch (e) {
-                console.error('Error loading memories:', e);
-                memories.value = [];
-            }
-            _memoriesLoaded = true;
-
-            currentView.value = 'chat';
-            showToast(`已切换到角色: ${char.name}`, 'success');
-
-            // 弹出自动生图询问 (仅在导入新卡时)
-            if (isNewImport) {
-                showAutoImageGenModal.value = true;
-            }
-
-            saveData(); // Save the switch immediately
-        };
+        const selectCharacter = async (index, isNewImport = false) => uiManager.switchToCharacter(index, isNewImport);
 
         const handleAvatarUpload = (event) => {
             const file = event.target.files[0];
@@ -9526,7 +8840,81 @@ image###生成的提示词###
         const toWorldInfoExportEntry = (entry) => {
             const normalized = normalizeWorldInfoEntry(entry);
             return cardUtils.toWorldInfoExportEntry(normalized);
+        }; // toWorldInfoExportEntry
+
+        // ======== StorageService Context & Instantiation (moved after all TDZ dependencies) ========
+        const storageContext = {
+            DATABASE_NAME: 'RPHubDB',
+            LEGACY_DATABASE_NAME: String.fromCharCode(83, 105, 108, 108, 121, 84, 97, 118, 101, 114, 110, 68, 66),
+            STORAGE_PREFIX: 'rp_hub_',
+            LEGACY_STORAGE_PREFIX: String.fromCharCode(115, 105, 108, 108, 121, 95, 116, 97, 118, 101, 114, 110, 95),
+            STORE_NAME: 'store',
+            DATABASE_VERSION: 1,
+            MAX_CONTEXT_SIZE,
+            DEFAULT_API_PROVIDER_ID,
+            characters, currentCharacter, currentCharacterIndex, chatHistory,
+            presets, regexScripts, globalRegexScripts,
+            worldInfo, globalWorldInfo, globalUiTemplates,
+            memories, userProfiles, activeProfileId, lastActiveCharacterId,
+            activeTools, isGenerating, isRemoteGenerating,
+            settings, user, worldInfoSettings, memorySettings,
+            get isInitComplete() { return _initComplete; },
+            set isInitComplete(v) { _initComplete = v; },
+            get isMemoriesLoaded() { return _memoriesLoaded; },
+            set isMemoriesLoaded(v) { _memoriesLoaded = v; },
+            generateUUID, showToast,
+            normalizeWorldInfoEntry, normalizeRegexScript, normalizeUiTemplate,
+            normalizePreset, normalizeFontFamily, applyFontFamily,
+            normalizeApiProviderSettings, getApiProviderByUrl,
+            normalizeActiveTools, normalizeActiveToolAggressivenessSettings,
+            normalizeMemorySettings,
         };
+
+        storageService = new StorageService(storageContext);
+        // ==================================================
+
+        // ======== UIManager Context & Instantiation ========
+        Object.assign(uiContext, {
+            chatHistory, chatContainer, chatRenderLimit, messageElements,
+            isChatFullscreen, isMobileKeyboardOpen, inputBox,
+            currentCharacterIndex, currentCharacter, characters,
+            regexScripts, worldInfo, globalWorldInfo, globalRegexScripts,
+            presets, memories, recentGenerationTimes,
+            isAutoImageGenEnabled, showAutoImageGenModal, currentView,
+            isConversationBusy, settings, user,
+            stopGeneration, waitForConversationIdle, saveChatHistoryNow,
+            flushPendingChatHistorySave, abortUiTemplateUpdate, saveData,
+            showToast, getScopedStoredValue,
+            combineRegexScriptsForCharacter, finishApplyingCharacterScopedData,
+            enforceSpecialRules, updateImageGenRegexState, hasThinkingOrTools,
+            prepareMemoriesForRuntime, normalizeUiTemplate,
+            normalizeWorldInfoEntry,
+            saveGlobalUiTemplateRuntimeForCharacter,
+            loadGlobalUiTemplateRuntimeForCharacter,
+            ensureGlobalUiTemplates, cloneUiObject, markUiTemplateStatus,
+            generateUUID, nextTick, closeMobileMenu,
+            get isLoadingEarlierChatMessages() { return isLoadingEarlierChatMessages; },
+            set isLoadingEarlierChatMessages(v) { isLoadingEarlierChatMessages = v; },
+            get isChatTopUnlockArmed() { return isChatTopUnlockArmed; },
+            set isChatTopUnlockArmed(v) { isChatTopUnlockArmed = v; },
+            get _isApplyingCharacterScopedData() { return _isApplyingCharacterScopedData; },
+            set _isApplyingCharacterScopedData(v) { _isApplyingCharacterScopedData = v; },
+            get _memoriesLoaded() { return _memoriesLoaded; },
+            set _memoriesLoaded(v) { _memoriesLoaded = v; },
+            get lastAppliedMobileViewportHeight() { return lastAppliedMobileViewportHeight; },
+            set lastAppliedMobileViewportHeight(v) { lastAppliedMobileViewportHeight = v; },
+            get lastAppliedMobileKeyboardInset() { return lastAppliedMobileKeyboardInset; },
+            set lastAppliedMobileKeyboardInset(v) { lastAppliedMobileKeyboardInset = v; },
+            get lastAppliedMobileBackgroundHeight() { return lastAppliedMobileBackgroundHeight; },
+            set lastAppliedMobileBackgroundHeight(v) { lastAppliedMobileBackgroundHeight = v; },
+            get mobileViewportRaf() { return mobileViewportRaf; },
+            set mobileViewportRaf(v) { mobileViewportRaf = v; },
+            get mobileKeyboardBlurTimer() { return mobileKeyboardBlurTimer; },
+            set mobileKeyboardBlurTimer(v) { mobileKeyboardBlurTimer = v; },
+            INITIAL_RENDER_LIMIT: CHAT_RENDER_INITIAL_LIMIT,
+            RENDER_BATCH_SIZE: CHAT_RENDER_BATCH_SIZE,
+        });
+        uiManager = new UIManager(uiContext);
 
         const importCharacter = (event) => {
             const file = event.target.files[0];
@@ -9960,6 +9348,7 @@ image###生成的提示词###
             document.addEventListener('webkitfullscreenchange', syncChatFullscreenState);
 
             await loadData();
+            appReady.value = true;
             fetchQuota(); // Fetch quota after saved settings are loaded
 
             checkUpdate(); // Check for updates — 必须在 loadData 之后，否则 localStorage 代理中的 update_id 还未从服务端加载
@@ -10622,21 +10011,7 @@ image###生成的提示词###
             clearTimeout(mobileKeyboardBlurTimer);
         });
         // 解析并截断生成的包含 HTML UI 的正文，避免闪屏问题
-        const processMainContent = (mainText, isGeneratingState) => {
-            if (!isGeneratingState) return { text: mainText, showSpinner: false };
-            const patterns = ['```html', '```vue', '<!DOCTYPE', '<div', '<style'];
-            let earliestIndex = -1;
-            for (const p of patterns) {
-                const idx = mainText.toLowerCase().indexOf(p);
-                if (idx !== -1 && (earliestIndex === -1 || idx < earliestIndex)) {
-                    earliestIndex = idx;
-                }
-            }
-            if (earliestIndex !== -1) {
-                return { text: mainText.substring(0, earliestIndex), showSpinner: true };
-            }
-            return { text: mainText, showSpinner: false };
-        };
+        const processMainContent = (mainText, isGeneratingState) => uiManager.processStreamContent(mainText, isGeneratingState);
 
         const switchProfile = (id) => {
             const profile = userProfiles.value.find(p => p.uuid === id);

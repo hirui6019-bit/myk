@@ -1,0 +1,44 @@
+{
+  "$schema": "RP Hub 活动工具默认定义配置",
+  "defaultResultCount": 3,
+  "minResultCount": 1,
+  "maxResultCount": 10,
+  "tools": [
+    {
+      "id": "tool_memory",
+      "name": "向量记忆主动检索",
+      "type": "vector",
+      "callName": "tool_memory",
+      "description": "当需要长期记忆、旧剧情、历史设定、过往关系、人物状态、物品来历或用户暗指内容时，单独输出 <tool_memory_add:检索内容> 或 <tool_memory_cover:检索内容>。每行一个标签，单次回复最多 5 个工具标签，不写说明或 COT；多个独立信息点拆开查，优先最关键的信息点，检索词要具体，优先人物、事件、物品、地点和时间线。没有当前上下文或检索结果支持的设定、关系、状态和事件不要编造。本轮第一次检索一律用 add；看到工具结果后，若是补充不同证据且旧结果有用就 add；若旧结果偏题、太宽、重复、方向错误、噪声过多，或更具体检索能替代旧结果，应优先用 cover 清理上下文冗余，把注意力集中在更准确的记忆上。结果足够就继续正文，不够就换更具体的问题继续查。",
+      "displayDescription": "让角色在上下文信息不够明确时，主动检索向量记忆，适合找旧剧情、历史设定、人物关系、物品来历和用户暗指过的内容。"
+    },
+    {
+      "id": "tool_grep",
+      "name": "关键词检索",
+      "type": "keyword",
+      "callName": "tool_grep",
+      "description": "当需要精准抓取当前对话历史里的原文内容时，单独输出 <tool_grep_add:关键词> 或 <tool_grep_cover:关键词>。关键词要尽量写原文可能出现的词，适合找台词、名称、物品、地点、设定词、前文原句或具体细节。多个独立信息点必须拆开，每行一个标签，单次回复最多 5 个工具标签，不写说明或 COT。本轮第一次关键词检索一律用 add；看到结果后，若旧结果有用且需要保留就 add；若旧关键词结果偏题、太宽、重复、噪声过多，或更准确关键词能替代旧结果，应优先用 cover 清理冗余原文片段，避免旧结果分散注意力。",
+      "displayDescription": "按关键词精准抓取当前对话历史里的原文片段，适合找台词、名称、物品、地点和具体前文。"
+    },
+    {
+      "id": "tool_web",
+      "name": "Tavily 联网搜索",
+      "type": "web",
+      "callName": "tool_web",
+      "apiKeyField": "tavilyApiKey",
+      "description": "当本地上下文、角色记忆、关键词检索都不足以确认作品设定、同人资料、冷门角色、现实最新信息或网页资料时，单独输出 <tool_web_add:联网搜索内容或网页链接> 或 <tool_web_cover:联网搜索内容或网页链接>。先用具体关键词搜索，再按需读取真实 URL；查询优先包含作品名、角色名、设定名、站点、语言关键词或别名。多个独立信息点必须拆开，单次回复最多 5 个工具标签。本轮第一次联网搜索或首次读取 URL 一律用 add；看到结果后，若旧结果有用且需要保留就 add；若搜索结果偏题、太宽、重复、来源噪声多，或新搜索/网页读取能替代旧结果，应优先用 cover 清理上下文冗余，避免无关网页摘要干扰判断。",
+      "displayDescription": "通过 Tavily 联网搜索补充外部资料，也能进入链接读取网页详情，适合同人设定、作品百科、冷门角色和最新信息。"
+    },
+    {
+      "id": "tool_world",
+      "name": "世界书阅读/管理",
+      "type": "world",
+      "callName": "tool_world",
+      "worldInfoAccessMode": "read",
+      "description": "当需要查看世界书时，在正文中单独输出 <tool_world_add:list> 或 <tool_world_add:read 世界书名字>。流程是先获取已开启世界书名字列表，再由你决定阅读哪些世界书的完整内容。当前为阅读模式，不能编辑世界书。系统只处理已开启且非系统内置的世界书。",
+      "displayDescription": "阅读已开启世界书：支持列出世界书列表，阅读世界书内容，不允许编辑世界书内容。",
+      "descriptionEditMode": "当需要查看或修改世界书时，在正文中单独输出 <tool_world_add:list>、<tool_world_add:read 世界书名字> 或 <tool_world_add:{\"action\":\"edit\",\"name\":\"世界书名字\",\"operation\":\"replace\",\"content\":\"新的完整内容\"}>。流程是先获取已开启世界书名字列表，再由你决定阅读哪些世界书的完整内容，最后只在用户明确要求时编辑内容。系统只处理已开启且非系统内置的世界书。",
+      "displayDescriptionEditMode": "管理已开启世界书：支持列出世界书列表，阅读世界书内容，编辑世界书内容。"
+    }
+  ]
+}

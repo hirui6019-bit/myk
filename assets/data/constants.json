@@ -1,0 +1,27 @@
+{
+  "$schema": "RP Hub 全局常量配置",
+  "MAX_CONTEXT_SIZE": 1000000,
+  "IMAGE_GEN_BASE_URL": "https://nai.sta1n.cn",
+  "DEFAULT_API_PROVIDER_ID": "sta1n",
+  "DEFAULT_AVATAR": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2U1ZTdlYiIvPjwvc3ZnPg==",
+  "SYSTEM_REGEX_NAMES": ["Auto Replace {{user}}", "NAI画图正则"],
+  "SYSTEM_WORLD_INFO_NAMES": ["自动生图"],
+  "ROLE_MEMORY_VECTOR_RECALL_TAG": "role_memory_vector_recall",
+  "ACTIVE_TOOL_TAVILY_ENDPOINT": "https://api.tavily.com/search",
+  "ACTIVE_TOOL_TAVILY_EXTRACT_ENDPOINT": "https://api.tavily.com/extract",
+  "ACTIVE_TOOL_TAVILY_SEARCH_DEPTH": "advanced",
+  "OBSOLETE_REGEX_NAMES": ["隐藏正文的thinking", "Nai画图正则-本子风", "Nai画图正则-竖图"],
+  "PRESET_ROLE_DISPLAY_LABELS": {
+    "system": "系统",
+    "user": "User",
+    "assistant": "AI"
+  },
+  "DEFAULT_API_CONFIG": {
+    "apiUrl": "https://cdn.sta1n.cn/v1",
+    "apiKey": "",
+    "model": "",
+    "qualityModel": "",
+    "balancedModel": "",
+    "fastModel": ""
+  }
+}
