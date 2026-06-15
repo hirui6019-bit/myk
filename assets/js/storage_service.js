@@ -298,7 +298,8 @@ class StorageService {
             throw new Error('数据库未初始化');
         }
 
-        const dataToStore = options.clone === false ? value : this.#deepClone(value);
+        const cloneResult = options.clone === false ? value : this.#deepClone(value);
+        const dataToStore = JSON.parse(JSON.stringify(cloneResult));
 
         return new Promise((resolve, reject) => {
             const transaction = targetDatabase.transaction([this.#context.STORE_NAME], 'readwrite');
@@ -959,23 +960,23 @@ class StorageService {
  * @property {number} MAX_CONTEXT_SIZE
  * @property {string} DEFAULT_API_PROVIDER_ID
  *
- * @property {import('vue').Ref<Array>} characters
- * @property {import('vue').Ref<object>} currentCharacter
- * @property {import('vue').Ref<number>} currentCharacterIndex
- * @property {import('vue').Ref<Array>} chatHistory
- * @property {import('vue').Ref<Array>} presets
- * @property {import('vue').Ref<Array>} regexScripts
- * @property {import('vue').Ref<Array>} globalRegexScripts
- * @property {import('vue').Ref<Array>} worldInfo
- * @property {import('vue').Ref<Array>} globalWorldInfo
- * @property {import('vue').Ref<Array>} globalUiTemplates
- * @property {import('vue').Ref<Array>} memories
- * @property {import('vue').Ref<Array>} userProfiles
- * @property {import('vue').Ref<string>} activeProfileId
- * @property {import('vue').Ref<number|null>} lastActiveCharacterId
- * @property {import('vue').Ref<Array>} activeTools
- * @property {import('vue').Ref<boolean>} isGenerating
- * @property {import('vue').Ref<boolean>} isRemoteGenerating
+ * @property {object} characters
+ * @property {object} currentCharacter
+ * @property {number} currentCharacterIndex
+ * @property {object} chatHistory
+ * @property {object} presets
+ * @property {object} regexScripts
+ * @property {object} globalRegexScripts
+ * @property {object} worldInfo
+ * @property {object} globalWorldInfo
+ * @property {object} globalUiTemplates
+ * @property {object} memories
+ * @property {object} userProfiles
+ * @property {string} activeProfileId
+ * @property {number|null} lastActiveCharacterId
+ * @property {object} activeTools
+ * @property {boolean} isGenerating
+ * @property {boolean} isRemoteGenerating
  *
  * @property {object} settings
  * @property {object} user
@@ -999,3 +1000,7 @@ class StorageService {
  * @property {Function} normalizeActiveToolAggressivenessSettings
  * @property {Function} normalizeMemorySettings
  */
+
+export { StorageService };
+
+

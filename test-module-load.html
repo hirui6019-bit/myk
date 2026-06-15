@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module Load Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        #status { padding: 10px; border: 1px solid #ccc; margin-top: 20px; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>ES Module Load Test</h1>
+    <div id="status">Testing...</div>
+    
+    <script>
+        const statusEl = document.getElementById('status');
+        statusEl.textContent = 'Loading modules...';
+        statusEl.className = 'loading';
+    </script>
+    
+    <script type="module">
+        import { SYSTEM_REGEX_NAMES } from './assets/js/constants.js';
+        import { generateUUID } from './assets/js/utils.js';
+        import { StorageService } from './assets/js/storage_service.js';
+        
+        console.log('Constants loaded:', SYSTEM_REGEX_NAMES);
+        console.log('Utils loaded:', typeof generateUUID);
+        console.log('StorageService loaded:', typeof StorageService);
+        
+        const statusEl = document.getElementById('status');
+        statusEl.textContent = 'All modules loaded successfully!';
+        statusEl.className = 'success';
+    </script>
+    
+    <script type="module">
+        try {
+            await import('./assets/js/app.js?v=' + Date.now());
+            const statusEl = document.getElementById('status');
+            statusEl.textContent += '\napp.js loaded successfully!';
+        } catch (e) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = 'Error loading app.js: ' + e.message;
+            statusEl.className = 'error';
+            console.error('Module load error:', e);
+        }
+    </script>
+</body>
+</html>

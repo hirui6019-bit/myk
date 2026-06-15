@@ -4848,14 +4848,14 @@
     </div>
 
     <script>
+        // 传统脚本依赖（提供全局变量）
         document.write('<script src="assets/js/data-loader.js?v=' + new Date().getTime() + '"><\/script>');
-        document.write('<script src="assets/js/utils.js?v=' + new Date().getTime() + '"><\/script>');
         document.write('<script src="assets/js/card-utils.js?v=' + new Date().getTime() + '"><\/script>');
         document.write('<script src="assets/js/ui-select.js?v=' + new Date().getTime() + '"><\/script>');
-        document.write('<script src="assets/js/storage_service.js?v=' + new Date().getTime() + '"><\/script>');
         document.write('<script src="assets/js/ui_renderer.js?v=' + new Date().getTime() + '"><\/script>');
-        document.write('<script src="assets/js/app.js?v=' + new Date().getTime() + '"><\/script>');
     </script>
+    <!-- ES Modules: 常量、工具、主应用 -->
+    <script type="module" src="assets/js/app.js?v=1781517683"></script>
 </body>
 
 </html>

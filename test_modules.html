@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><title>Module Test</title></head>
+<body>
+<h1>Module Test</h1>
+<div id="output">Loading...</div>
+<script type="module">
+try {
+    // Test imports
+    const output = document.getElementById('output');
+    output.textContent = 'Modules loaded successfully!';
+    output.style.color = 'green';
+} catch(e) {
+    document.getElementById('output').textContent = 'Error: ' + e.message;
+    document.getElementById('output').style.color = 'red';
+}
+</script>
+</body>
+</html>
