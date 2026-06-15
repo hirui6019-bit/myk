@@ -1565,6 +1565,9 @@ createApp({
             importUiTemplates,
         } = uiTemplateManager;
 
+        const scrollToBottom = () => uiManager.scrollToBottom();
+        const selectCharacter = async (index, isNewImport = false) => uiManager.switchToCharacter(index, isNewImport);
+
         const characterManager = createCharacterManager({
             characters,
             editingCharacter,
@@ -2335,8 +2338,6 @@ createApp({
             // Single player
             await generateResponse(startTime);
         };
-
-        const scrollToBottom = () => uiManager.scrollToBottom();
 
         const clearChat = () => {
             confirmAction('确定要清空聊天记录吗？记忆也将一并清空，此操作无法撤销。', () => {
@@ -6484,8 +6485,6 @@ createApp({
         };
 
         const prepareLoadedChatHistoryForDisplay = (messages = []) => uiManager.prepareChatHistoryForDisplay(messages);
-
-        const selectCharacter = async (index, isNewImport = false) => uiManager.switchToCharacter(index, isNewImport);
 
 
         // ======== StorageService Context & Instantiation (moved after all TDZ dependencies) ========
