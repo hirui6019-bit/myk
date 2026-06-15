@@ -136,6 +136,8 @@ import {
 
 import { StorageService } from './storage_service.js';
 
+import { HUD_CSS, IFRAME_RESET_CSS, CONSOLE_STYLES, getPresetRoleBadgeClass } from './app_styles.js';
+
 // Alias for backward compatibility with existing code
 const ACTIVE_TOOL_VECTOR_TYPE = ACTIVE_TOOL_VECTOR_TYPE_CONST;
 
@@ -822,48 +824,6 @@ createApp({
             { value: 'user', label: 'User消息' },
             { value: 'assistant', label: 'AI消息' }
         ];
-        const fontFamilyOptions = [
-            { value: 'modern', label: '现代通用字体' },
-            { value: 'serif', label: '衬线字体' },
-            { value: 'system', label: '系统字体' }
-        ];
-        const imageStyleOptions = [
-            { value: 'vertical', label: '韩漫小清新风' },
-            { value: 'comicDoujin', label: '漫画同人风' },
-            { value: 'r18', label: '2.5D唯美风' },
-            { value: 'lolita25d', label: '2.5D唯美风（萝）' },
-            { value: 'anime', label: '本子里番风' },
-            { value: 'galgame', label: 'GalGame风' },
-            { value: 'custom', label: '自定义' }
-        ];
-        const imageSizeOptions = [
-            { value: '竖图', label: '竖图(-1)' },
-            { value: '横图', label: '横图(-1)' },
-            { value: '方图', label: '方图(-1)' },
-            { value: '2K竖图', label: '2K竖图(-15)' },
-            { value: '2K横图', label: '2K横图(-15)' },
-            { value: '2K方图', label: '2K方图(-15)' },
-            { value: '4K竖图', label: '4K竖图(-25)' },
-            { value: '4K横图', label: '4K横图(-25)' },
-            { value: '4K方图', label: '4K方图(-25)' }
-        ];
-        const imageGenCountOptions = [1, 2, 3, 4, 5, 6].map(count => ({
-            value: count,
-            label: `${count} 张`
-        }));
-        const uiTemplatePlacementOptions = [
-            { value: 'top', label: '对话顶部' },
-            { value: 'bottom', label: '对话底部' }
-        ];
-        const worldInfoPositionOptions = [
-            { group: '系统提示词', value: 'system_top', label: '最顶层' },
-            { group: '系统提示词', value: 'global_note', label: '全局备注' },
-            { group: '系统提示词', value: 'before_char', label: '角色设定前' },
-            { group: '系统提示词', value: 'after_char', label: '角色设定后' },
-            { group: '对话中', value: 'at_depth', label: '按深度插入' },
-            { group: '对话中', value: 'user_top', label: '用户消息顶部' },
-            { group: '对话中', value: 'assistant_top', label: '助手消息顶部' }
-        ];
         const presetRoleDisplayLabels = {
             system: '系统',
             user: 'User',
@@ -876,12 +836,6 @@ createApp({
         const getPresetRoleDisplayLabel = (preset) => {
             const role = normalizePresetRole(preset?.role);
             return presetRoleDisplayLabels[role] || '系统';
-        };
-        const getPresetRoleBadgeClass = (preset) => {
-            const role = normalizePresetRole(preset?.role);
-            if (role === 'user') return 'bg-green-100 text-green-700 border-green-200';
-            if (role === 'assistant') return 'bg-purple-100 text-purple-700 border-purple-200';
-            return 'bg-red-100 text-red-700 border-red-200';
         };
         const ROLE_MEMORY_VECTOR_RECALL_OPEN_TAG = `<${ROLE_MEMORY_VECTOR_RECALL_TAG}>`;
         const ROLE_MEMORY_VECTOR_RECALL_CLOSE_TAG = `</${ROLE_MEMORY_VECTOR_RECALL_TAG}>`;
@@ -1270,7 +1224,7 @@ createApp({
 
         const onGeneratorLoad = () => {
             isGeneratorLoading.value = false;
-            console.log('%c[Generator] Character Workshop Iframe Loaded', 'color: #10b981; font-weight: bold;');
+            console.log('%c[Generator] Character Workshop Iframe Loaded', CONSOLE_STYLES.genLoaded);
             syncSettingsToGenerator();
         };
 
@@ -1280,7 +1234,7 @@ createApp({
 
         const onSquareLoad = () => {
             isSquareLoading.value = false;
-            console.log('%c[Square] Character Square Iframe Loaded', 'color: #3b82f6; font-weight: bold;');
+            console.log('%c[Square] Character Square Iframe Loaded', CONSOLE_STYLES.sqLoaded);
         };
 
         // Watch view change to refresh generator/plaza
@@ -1958,8 +1912,7 @@ createApp({
 
         const buildExecutableHtmlDocument = (rawHtml) => {
             const metaViewport = '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">';
-            const hudCSS = '.sinan-hud{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;padding:12px;background:linear-gradient(to bottom right,rgba(255,255,255,0.9),rgba(255,255,255,0.6));border-radius:12px;border:1px solid rgba(0,0,0,0.08);backdrop-filter:blur(4px)}.char-card{flex:1 1 140px;background:#fff;padding:10px;border-radius:8px;border-left:4px solid #ddd;box-shadow:0 2px 6px rgba(0,0,0,0.04);display:flex;flex-direction:column;gap:4px;font-size:12px;position:relative;overflow:hidden;transition:transform 0.2s}.char-card:hover{transform:translateY(-2px);box-shadow:0 4px 8px rgba(0,0,0,0.1)}.char-name{font-weight:700;font-size:14px;color:#374151;display:flex;justify-content:space-between;align-items:center}.char-mood{color:#6b7280;font-size:12px}.char-loc{color:#9ca3af;font-size:11px;margin-top:auto;padding-top:4px}.bar-bg{height:4px;background:#f3f4f6;border-radius:2px;overflow:hidden;margin-top:6px}.bar-fill{height:100%;background:#10b981;border-radius:2px}.c-tongqiu{border-left-color:#f59e0b}.c-tongqiu .bar-fill{background:#f59e0b}.c-yufan{border-left-color:#3b82f6}.c-yufan .bar-fill{background:#3b82f6}.c-linghu{border-left-color:#8b5cf6}.c-linghu .bar-fill{background:#8b5cf6}.c-chongtian{border-left-color:#ef4444}.c-chongtian .bar-fill{background:#ef4444}';
-            const resetStyle = '<style>html,body{margin:0!important;padding:0!important;width:100%!important;height:auto!important;min-height:auto!important;word-wrap:break-word!important;box-sizing:border-box!important;overflow:hidden!important;}::-webkit-scrollbar{display:none;}*,*::before,*::after{box-sizing:inherit!important;}img,video,canvas,svg{max-width:100%!important;height:auto!important;}table{display:block!important;overflow-x:auto!important;max-width:100%!important;}pre{white-space:pre-wrap!important;word-wrap:break-word!important;max-width:100%!important;}.container,.reality-panel,.app-container{max-width:100%!important;width:100%!important;margin:0!important;border-radius:0!important;box-shadow:none!important;border:none!important;height:auto!important;min-height:0!important;}body>div:first-child{margin:0!important;max-width:100%!important;height:auto!important;min-height:0!important;}#app{height:auto!important;min-height:auto!important;}.bottom-safe{display:none!important;height:0!important;min-height:0!important;margin:0!important;padding:0!important;}' + hudCSS + '</style>';
+            const resetStyle = '<style>' + IFRAME_RESET_CSS + HUD_CSS + '</style>';
             const jqueryScript = '<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js" defer><\/script>';
             const scriptShim = `
                 <script>
@@ -3860,20 +3813,20 @@ ${content}
         };
 
         const printAIRequestLogs = (messages, modelName) => {
-            console.group('%c🚀 AI 请求详情', 'color: #10b981; font-weight: bold; font-size: 14px;');
-            console.log(`%c🤖 模型: %c${modelName}`, 'font-weight: bold;', 'color: #3b82f6;');
+            console.group('%c🚀 AI 请求详情', CONSOLE_STYLES.aiGroup);
+            console.log(`%c🤖 模型: %c${modelName}`, CONSOLE_STYLES.aiModelLabel, CONSOLE_STYLES.aiModelValue);
 
-            console.log(`%c📦 发送消息列表 (${messages.length} 条):`, 'font-weight: bold;');
+            console.log(`%c📦 发送消息列表 (${messages.length} 条):`, CONSOLE_STYLES.aiMsgCount);
 
             // 单独展示系统提示词
             const sysMsg = messages.find(m => m.role === 'system');
             if (sysMsg) {
-                console.groupCollapsed('%c🛠️ 查看系统提示词 (System Prompt)', 'color: #ef4444; font-weight: bold;');
+                console.groupCollapsed('%c🛠️ 查看系统提示词 (System Prompt)', CONSOLE_STYLES.aiSysPromptGroup);
                 console.log(sysMsg.content);
                 console.groupEnd();
             }
 
-            console.groupCollapsed('%c📝 查看完整消息列表', 'color: #f59e0b; font-weight: bold;');
+            console.groupCollapsed('%c📝 查看完整消息列表', CONSOLE_STYLES.aiFullMsgGroup);
             console.table(messages.map(m => ({
                 'Role': m.role,
                 'Name': m.name || (m.role === 'system' ? 'System' : 'Unknown'),
@@ -3883,7 +3836,7 @@ ${content}
             console.log('完整消息对象:', messages);
             console.groupEnd();
 
-            console.log('%c✅ 请求已发送，等待响应...', 'color: #10b981;');
+            console.log('%c✅ 请求已发送，等待响应...', CONSOLE_STYLES.aiSent);
             console.groupEnd();
         };
 
