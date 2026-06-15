@@ -4,7 +4,6 @@ import {
     SYSTEM_WORLD_INFO_NAMES as systemWorldInfoNames,
     DEFAULT_AVATAR as defaultAvatar,
     // API
-    IMAGE_GEN_BASE_URL,
     DEFAULT_API_PROVIDER_ID,
     DEFAULT_API_CONFIG,
     API_PROVIDER_OPTIONS as apiProviderOptions,
@@ -14,9 +13,6 @@ import {
     // UI Options
     PRESET_ROLE_OPTIONS as presetRoleOptions,
     FONT_FAMILY_OPTIONS as fontFamilyOptions,
-    IMAGE_STYLE_OPTIONS as imageStyleOptions,
-    IMAGE_SIZE_OPTIONS as imageSizeOptions,
-    IMAGE_GEN_COUNT_OPTIONS as imageGenCountOptions,
     UI_TEMPLATE_PLACEMENT_OPTIONS as uiTemplatePlacementOptions,
     WORLD_INFO_POSITION_OPTIONS as worldInfoPositionOptions,
     PRESET_ROLE_DISPLAY_LABELS as presetRoleDisplayLabels,
@@ -135,6 +131,9 @@ import {
 } from './utils.js';
 
 import { StorageService } from './storage_service.js';
+import { createConversationTurnManager } from './conversation_turns.js';
+import { createWorldInfoEngine } from './world_info.js';
+import { createImageGenManager } from './image_gen.js';
 
 // Alias for backward compatibility with existing code
 const ACTIVE_TOOL_VECTOR_TYPE = ACTIVE_TOOL_VECTOR_TYPE_CONST;
@@ -214,53 +213,10 @@ createApp({
         const showWorldInfoEditor = ref(false);
         const showActiveToolEditor = ref(false);
         const showUserSetupModal = ref(false);
-        const showAutoImageGenModal = ref(false);
         const pendingActiveToolContext = ref('');
         const activeToolResultContexts = ref([]);
         const tempUserSetup = reactive({ name: '', description: '', person: 'second' });
         const characterDisplayLimit = ref(8);
-
-        // Quota State
-        const showQuotaPanel = ref(false);
-        const quotaValue = ref(0);
-        const quotaLoading = ref(false);
-        const quotaError = ref(false);
-        const quotaAvailable = ref(false);
-
-        const fetchQuota = async () => {
-            quotaLoading.value = true;
-            quotaError.value = false;
-            try {
-                const imageGenToken = settings.imageGenKey.trim();
-                if (!imageGenToken) {
-                    quotaValue.value = 0;
-                    quotaAvailable.value = false;
-                    return;
-                }
-                const baseUrl = IMAGE_GEN_BASE_URL;
-                const response = await fetch(`${baseUrl}/api/api/getUser`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ toUserId: imageGenToken })
-                });
-                const data = await response.json();
-                if (data.status === 'ok' && data.type === 'sta1n') {
-                    const val = Number.parseInt(data.data?.value, 10);
-                    if (!Number.isFinite(val)) throw new Error('Invalid quota value');
-                    quotaValue.value = val;
-                    quotaAvailable.value = val > 0;
-                } else {
-                    quotaError.value = true;
-                    quotaAvailable.value = false;
-                }
-            } catch (e) {
-                console.error('Quota fetch error:', e);
-                quotaError.value = true;
-                quotaAvailable.value = false;
-            } finally {
-                quotaLoading.value = false;
-            }
-        };
 
         // Removed Friends State
 
@@ -553,8 +509,6 @@ createApp({
         // Service Status
         const apiStatus = ref('unknown'); // 'unknown', 'checking', 'connected', 'error'
         const apiLatency = ref(0);
-        const imageGenStatus = ref('unknown');
-        const imageGenLatency = ref(0);
 
         const user = reactive({
             name: '请前往设置自定义你的名称',
@@ -827,30 +781,6 @@ createApp({
             { value: 'serif', label: '衬线字体' },
             { value: 'system', label: '系统字体' }
         ];
-        const imageStyleOptions = [
-            { value: 'vertical', label: '韩漫小清新风' },
-            { value: 'comicDoujin', label: '漫画同人风' },
-            { value: 'r18', label: '2.5D唯美风' },
-            { value: 'lolita25d', label: '2.5D唯美风（萝）' },
-            { value: 'anime', label: '本子里番风' },
-            { value: 'galgame', label: 'GalGame风' },
-            { value: 'custom', label: '自定义' }
-        ];
-        const imageSizeOptions = [
-            { value: '竖图', label: '竖图(-1)' },
-            { value: '横图', label: '横图(-1)' },
-            { value: '方图', label: '方图(-1)' },
-            { value: '2K竖图', label: '2K竖图(-15)' },
-            { value: '2K横图', label: '2K横图(-15)' },
-            { value: '2K方图', label: '2K方图(-15)' },
-            { value: '4K竖图', label: '4K竖图(-25)' },
-            { value: '4K横图', label: '4K横图(-25)' },
-            { value: '4K方图', label: '4K方图(-25)' }
-        ];
-        const imageGenCountOptions = [1, 2, 3, 4, 5, 6].map(count => ({
-            value: count,
-            label: `${count} 张`
-        }));
         const uiTemplatePlacementOptions = [
             { value: 'top', label: '对话顶部' },
             { value: 'bottom', label: '对话底部' }
@@ -886,189 +816,28 @@ createApp({
         const ROLE_MEMORY_VECTOR_RECALL_OPEN_TAG = `<${ROLE_MEMORY_VECTOR_RECALL_TAG}>`;
         const ROLE_MEMORY_VECTOR_RECALL_CLOSE_TAG = `</${ROLE_MEMORY_VECTOR_RECALL_TAG}>`;
 
-        const getMessageSourceIndexes = (message, index, trackSources) => {
-            const source = message?._sourceIndexes;
-            if (!Array.isArray(source)) return trackSources ? [index] : [];
-            const indexes = [];
-            for (let i = 0; i < source.length; i++) {
-                indexes.push(source[i]);
-            }
-            return indexes;
-        };
+        const turnManager = createConversationTurnManager({ chatHistory });
 
-        const toPlainContextMessage = (message, index, trackSources = false) => {
-            const nextMessage = {
-                role: message.role,
-                name: message.name,
-                content: String(message.content || '')
-            };
-            if (message.id) nextMessage.id = message.id;
-            if (trackSources) {
-                nextMessage._sourceIndexes = getMessageSourceIndexes(message, index, true);
-            } else if (Array.isArray(message?._sourceIndexes)) {
-                nextMessage._sourceIndexes = getMessageSourceIndexes(message, index, false);
-            }
-            if (Array.isArray(message?._worldInfoEntries)) {
-                nextMessage._worldInfoEntries = message._worldInfoEntries;
-            }
-            return nextMessage;
-        };
+        const {
+            getMessageSourceIndexes,
+            toPlainContextMessage,
+            mergeConsecutiveRoleMessages,
+            postprocessContextMessages,
+            getPostprocessedChatMessages,
+            buildConversationTurnSnapshot,
+            createCompletedTurnBeforeIndexResolver,
+            getConversationTurnAtIndexFromSnapshot,
+            getConversationTurnAtIndex,
+            getCompletedConversationTurnBeforeIndex,
+            getLatestCompleteConversationTurn,
+        } = turnManager;
 
-        const mergeConsecutiveRoleMessages = (messages, options = {}) => {
-            const {
-                mergeRoles = ['user', 'assistant'],
-                includeSystem = true,
-                trackSources = false
-            } = options;
-            const mergeRoleSet = new Set(mergeRoles);
-            const merged = [];
-            (Array.isArray(messages) ? messages : []).forEach((message, index) => {
-                if (!message || typeof message !== 'object') return;
-                if (!includeSystem && message.role === 'system') return;
-
-                const nextMessage = toPlainContextMessage(message, index, trackSources);
-
-                const previous = merged[merged.length - 1];
-                if (
-                    previous
-                    && previous.role === nextMessage.role
-                    && mergeRoleSet.has(nextMessage.role)
-                ) {
-                    previous.content = [previous.content, nextMessage.content].filter(Boolean).join('\n\n');
-                    if (!previous.name && nextMessage.name) previous.name = nextMessage.name;
-                    if (trackSources || previous._sourceIndexes || nextMessage._sourceIndexes) {
-                        previous._sourceIndexes = [
-                            ...(previous._sourceIndexes || []),
-                            ...(nextMessage._sourceIndexes || [])
-                        ];
-                    }
-                    if (previous._worldInfoEntries || nextMessage._worldInfoEntries) {
-                        previous._worldInfoEntries = [
-                            ...(previous._worldInfoEntries || []),
-                            ...(nextMessage._worldInfoEntries || [])
-                        ];
-                    }
-                    return;
-                }
-                merged.push(nextMessage);
-            });
-            return merged;
-        };
-
-        const postprocessContextMessages = (messages) => mergeConsecutiveRoleMessages(messages, {
-            mergeRoles: ['user', 'assistant'],
-            includeSystem: true
-        });
-
-        const getPostprocessedChatMessages = (messages = chatHistory.value, options = {}) => {
-            const { includeSystem = false } = options;
-            return mergeConsecutiveRoleMessages(messages, {
-                mergeRoles: ['user', 'assistant'],
-                includeSystem,
-                trackSources: true
-            });
-        };
-
-        const buildConversationTurnSnapshot = (messages = chatHistory.value, options = {}) => {
-            const { includeSystem = false, alreadyPostprocessed = false } = options;
-            const processedMessages = alreadyPostprocessed
-                ? (Array.isArray(messages) ? messages : [])
-                    .filter(message => message && typeof message === 'object' && (includeSystem || message.role !== 'system'))
-                    .map((message, index) => {
-                        const nextMessage = toPlainContextMessage(message, index, false);
-                        nextMessage._sourceIndexes = getMessageSourceIndexes(message, index, true);
-                        return nextMessage;
-                    })
-                : getPostprocessedChatMessages(messages, { includeSystem });
-
-            const turns = [];
-            let pendingUser = null;
-
-            processedMessages.forEach((message, messageIndex) => {
-                if (!message || message.role === 'system') return;
-
-                const sourceIndexes = Array.isArray(message._sourceIndexes) ? message._sourceIndexes : [messageIndex];
-                const sourceStartIndex = sourceIndexes.length ? Math.min(...sourceIndexes) : messageIndex;
-                const sourceEndIndex = sourceIndexes.length ? Math.max(...sourceIndexes) : messageIndex;
-
-                if (message.role === 'user') {
-                    pendingUser = {
-                        message,
-                        messageIndex,
-                        sourceIndexes,
-                        sourceStartIndex,
-                        sourceEndIndex
-                    };
-                    return;
-                }
-
-                if (message.role !== 'assistant' || !pendingUser) return;
-
-                const turn = turns.length + 1;
-                turns.push({
-                    turn,
-                    user: pendingUser.message,
-                    assistant: message,
-                    messages: [pendingUser.message, message],
-                    messageIndexes: [pendingUser.messageIndex, messageIndex],
-                    sourceIndexes: [...pendingUser.sourceIndexes, ...sourceIndexes],
-                    startIndex: pendingUser.sourceStartIndex,
-                    endIndex: sourceEndIndex
-                });
-                pendingUser = null;
-            });
-
-            return { messages: processedMessages, turns };
-        };
-
-        const createCompletedTurnBeforeIndexResolver = (snapshot = buildConversationTurnSnapshot()) => {
-            const turns = Array.isArray(snapshot?.turns)
-                ? [...snapshot.turns].sort((a, b) => (a.endIndex || 0) - (b.endIndex || 0))
-                : [];
-
-            return (index) => {
-                if (!Number.isFinite(index) || index <= 0) return null;
-                let left = 0;
-                let right = turns.length - 1;
-                let matchedTurn = null;
-
-                while (left <= right) {
-                    const middle = Math.floor((left + right) / 2);
-                    const turn = turns[middle];
-                    if ((turn.endIndex || 0) < index) {
-                        matchedTurn = turn.turn;
-                        left = middle + 1;
-                    } else {
-                        right = middle - 1;
-                    }
-                }
-
-                return matchedTurn;
-            };
-        };
-
-        const getConversationTurnAtIndexFromSnapshot = (snapshot, index) => {
-            if (!Number.isFinite(index) || index < 0) return null;
-            const turns = Array.isArray(snapshot?.turns) ? snapshot.turns : [];
-            const matchedTurn = turns.find(turn => (turn.sourceIndexes || []).includes(index));
-            if (matchedTurn) return matchedTurn.turn;
-            const previousTurns = turns.filter(turn => turn.endIndex < index).length;
-            return previousTurns + 1;
-        };
-
-        const getConversationTurnAtIndex = (index) => {
-            return getConversationTurnAtIndexFromSnapshot(buildConversationTurnSnapshot(), index);
-        };
-
-        const getCompletedConversationTurnBeforeIndex = (index) => {
-            if (!Number.isFinite(index) || index <= 0) return null;
-            return createCompletedTurnBeforeIndexResolver()(index);
-        };
-
-        const getLatestCompleteConversationTurn = () => {
-            const snapshot = buildConversationTurnSnapshot();
-            return snapshot.turns[snapshot.turns.length - 1] || null;
-        };
+        const worldInfoEngine = createWorldInfoEngine({ systemWorldInfoNames, cardUtils });
+        const {
+            normalizeWorldInfoEntry,
+            toWorldInfoExportEntry,
+            getWorldInfoDisplayName,
+        } = worldInfoEngine;
 
         const regexScripts = ref([]);
         const globalRegexScripts = ref([]);
@@ -1448,37 +1217,6 @@ createApp({
             }
         }, { deep: true });
 
-        // Auto Image Gen & Stream Linkage
-        const isAutoImageGenEnabled = computed({
-            get: () => {
-                const entry = worldInfo.value.find(w => w.comment === '自动生图');
-                return entry ? entry.enabled : false;
-            },
-            set: (val) => {
-                const entry = worldInfo.value.find(w => w.comment === '自动生图');
-                if (entry) {
-                    entry.enabled = val;
-                } else {
-                    showToast('未找到“自动生图”世界书条目，请确认配置', 'warning');
-                }
-            }
-        });
-
-        const showAutoImageGenToggleToast = (enabled) => {
-            showToast(enabled ? '自动生图已开启' : '自动生图已关闭', enabled ? 'success' : 'info');
-        };
-
-        const setAutoImageGenEnabled = (enabled) => {
-            isAutoImageGenEnabled.value = enabled;
-            const changed = isAutoImageGenEnabled.value === enabled;
-            if (changed) showAutoImageGenToggleToast(enabled);
-            return changed;
-        };
-
-        const toggleAutoImageGen = () => {
-            setAutoImageGenEnabled(!isAutoImageGenEnabled.value);
-        };
-
         const setWorldInfoEnabled = (entry, enabled, event) => {
             if (entry?.comment === '自动生图') {
                 const changed = setAutoImageGenEnabled(enabled);
@@ -1488,122 +1226,6 @@ createApp({
 
             if (entry) entry.enabled = enabled;
         };
-
-        const updateImageGenRegexState = ({ enableRegex = false } = {}) => {
-            const imageGenRegexName = 'NAI画图正则';
-            let regex = regexScripts.value.find(r => r.name === imageGenRegexName);
-            if (!regex) {
-                enforceSpecialRules();
-                regex = regexScripts.value.find(r => r.name === imageGenRegexName);
-                if (!regex) return [];
-            }
-
-            const defaultArtists = '[[[artist:dishwasher1910]]], {{yd_(orange_maru)}}, [artist:ciloranko], [artist:sho_(sho_lwlw)], [ningen mame], year 2024,';
-            const comicDoujinArtists = `(masterpiece:1.3), (best quality:1.2), (highres), (absurdres),
-(extremely detailed illustration:1.2), (anime style:1.1),
-
-(artist:feipin zhanshi:1.0), (artist:nlebo-hentai:0.9), (artist:sos adult:0.85),
-(artist:hews:0.4),
-
-(detailed skin texture:1.15), (glossy skin:1.1),
-(thick lineart:1.1), (high contrast:1.15),
-(vivid colors:1.1), (detailed shading:1.15),
-(warm color palette:1.05),
-(cute face:1.1), (detailed eyes:1.15), (detailed face:1.1),`;
-            const r18Artists = "0.9::misaka_12003-gou ::, dino_(dinoartforame), wanke, liduke, year 2025, realistic, 4k, -2::green ::, textless version, The image is highly intricate finished drawn. Only the character's face is in anime style, but their body is in realistic style. 1.35::A highly finished photo-style artwork that has lively color, graphic texture, realistic skin surface, and lifelike flesh with little obliques::. 1.63::photorealistic::, 1.63::photo(medium)::, \\n20::best quality, absurdres, very aesthetic, detailed, masterpiece::,, very aesthetic, masterpiece, no text,";
-            const lolita25dArtists = "0.9::misaka_12003-gou & dino, rurudo,  mignon,wanke & liduk::, year 2025, realistic, 4k, -2::green ::, textless version, The image is highly intricate finished drawn. Only the character's face is in anime style, but their body is in realistic style. 1.35::A highly finished photo-style artwork that has lively color, graphic texture, realistic skin surface, and lifelike flesh with little obliques::. 1.63::photorealistic::, 1.63::photo(medium)::, \\n20::best quality, absurdres, very aesthetic, detailed, masterpiece::,, very aesthetic, masterpiece, no text,";
-            const animeArtists = '1.4::asanagi::,{{{{{artist:asanagi}}}}},1.2::xiaoluo_xl::,1.3::Artist: misaka_12003-gou::,1.2::Artist:shexyo::,0.7::Artist:b.sa_(bbbs)::,1::Artist:qiandaiyiyu::,1.05::artist:natedecock::,1.05::artist:kunaboto::,0.75::artist:kandata_nijou::,1.05::artist:zer0.zer0 ::,1.05::artist:jasony::,0.75::misaka_12003-gou ::, dino_(dinoartforame), wanke, liduke, year 2025, realistic, 4k, -2::green ::, {textless version, The image is highly intricate finished drawn,write realistically,true to life}, 1.35::A highly finished photo-style artwork that has lively color, graphic texture, realistic skin surface, and lifelike flesh with little obliques::, 1.63::photorealistic::,3::age slider::,1.63::photo(medium)::, 2::best quality, absurdres, very aesthetic, detailed, masterpiece::,-4::Muscle definition, abs::';
-            const galgameArtists = 'artist:ningen_mame,, noyu_(noyu23386566),, toosaka asagi,, location,\\n20::best quality, absurdres, very aesthetic, detailed, masterpiece::,:,, very aesthetic, masterpiece, no text,';
-
-            let targetArtists = defaultArtists;
-            let styleName = '韩漫小清新风';
-            if (settings.imageStyle === 'comicDoujin') {
-                targetArtists = comicDoujinArtists;
-                styleName = '漫画同人风';
-            } else if (settings.imageStyle === 'r18') {
-                targetArtists = r18Artists;
-                styleName = '2.5D唯美风';
-            } else if (settings.imageStyle === 'lolita25d') {
-                targetArtists = lolita25dArtists;
-                styleName = '2.5D唯美风（萝）';
-            } else if (settings.imageStyle === 'anime') {
-                targetArtists = animeArtists;
-                styleName = '本子里番风';
-            } else if (settings.imageStyle === 'galgame') {
-                targetArtists = galgameArtists;
-                styleName = 'GalGame风';
-            } else if (settings.imageStyle === 'custom') {
-                targetArtists = settings.customImageArtists || '';
-                styleName = '自定义';
-            }
-
-            // 动态替换 URL 中的 artist 和 size 参数
-            const encodedTargetArtists = encodeURIComponent(targetArtists);
-            const oldReplacement = regex.replacement;
-            let newReplacement = oldReplacement.replace(/artist=[\s\S]*?(&size=)/, 'artist=' + encodedTargetArtists + '$1');
-            if (newReplacement === oldReplacement) {
-                newReplacement = oldReplacement.replace(/artist=[^&]+/, 'artist=' + encodedTargetArtists);
-            }
-            newReplacement = newReplacement.replace(/size=[^&]+/, 'size=' + settings.imageSize);
-            regex.replacement = newReplacement;
-
-            let messages = [];
-            // 检查 Artist 变化
-            const oldArtist = oldReplacement.match(/artist=([\s\S]*?)&size=/)?.[1] || oldReplacement.match(/artist=([^&]+)/)?.[1];
-            if (oldArtist !== encodedTargetArtists) {
-                messages.push(styleName);
-            }
-            // 检查 Size 变化
-            const oldSize = oldReplacement.match(/size=([^&]+)/)?.[1];
-            if (oldSize !== settings.imageSize) {
-                messages.push(`比例: ${settings.imageSize}`);
-            }
-
-            if (enableRegex && !regex.enabled) {
-                regex.enabled = true;
-                messages.push(`${imageGenRegexName} 已启用`);
-            }
-
-            return messages;
-        };
-
-        watch(isAutoImageGenEnabled, (newVal) => {
-            if (newVal) {
-                let messages = [];
-                const regexMessages = updateImageGenRegexState({ enableRegex: true });
-                if (regexMessages && regexMessages.length > 0) {
-                    messages.push(...regexMessages);
-                }
-
-                if (messages.length > 0) {
-                    showToast('为适配生图：' + messages.join('，'), 'info');
-                }
-            }
-        });
-
-        watch(() => settings.imageStyle, () => {
-            const messages = updateImageGenRegexState({ enableRegex: isAutoImageGenEnabled.value });
-            if (isAutoImageGenEnabled.value && messages && messages.length > 0) {
-                showToast('生图风格已切换：' + messages.join('，'), 'success');
-            }
-        });
-
-        watch(() => settings.customImageArtists, () => {
-            if (settings.imageStyle === 'custom') {
-                updateImageGenRegexState({ enableRegex: isAutoImageGenEnabled.value });
-            }
-        });
-
-        watch(() => settings.imageSize, () => {
-            const messages = updateImageGenRegexState({ enableRegex: isAutoImageGenEnabled.value });
-            if (isAutoImageGenEnabled.value && messages && messages.length > 0) {
-                showToast('生图比例已切换：' + messages.join('，'), 'success');
-            }
-        });
-
-        watch(() => settings.imageGenCount, () => {
-            enforceSpecialRules();
-        });
 
         const isDesktopSidebarViewport = () => window.matchMedia('(min-width: 768px)').matches;
         watch(() => settings.immersiveMode, (enabled) => {
@@ -2566,6 +2188,41 @@ ${content}
             }, duration);
         };
 
+        const imageGenManager = createImageGenManager({
+            settings,
+            regexScripts,
+            worldInfo,
+            showToast,
+            saveData,
+        });
+
+        const {
+            showAutoImageGenModal,
+            showQuotaPanel,
+            quotaValue,
+            quotaLoading,
+            quotaError,
+            quotaAvailable,
+            imageGenStatus,
+            imageGenLatency,
+            imageStyleOptions,
+            imageSizeOptions,
+            imageGenCountOptions,
+            isAutoImageGenEnabled,
+            fetchQuota,
+            checkImageGenStatus,
+            toggleAutoImageGen,
+            setAutoImageGenEnabled,
+            showAutoImageGenToggleToast,
+            stripDisabledImageGenContext,
+            updateImageGenRegexState,
+            injectImageGenRules: enforceSpecialRules,
+            setAutoImageGen,
+            setupWatchers,
+        } = imageGenManager;
+
+        imageGenManager.setupWatchers(watch);
+
         // Confirmation Dialog
         const cancelCallback = ref(null);
         const yieldToUi = () => new Promise(resolve => {
@@ -2619,17 +2276,6 @@ ${content}
         };
 
         // Regex Processing
-        // 辅助函数：当自动生图关闭时，只从发送给模型的上下文里移除可生图替换的内容
-        const stripDisabledImageGenContext = (text) => {
-            if (!text) return text;
-            if (isAutoImageGenEnabled.value) return text; // 生图开启时保留
-            return String(text)
-                .replace(/<image\b[^>]*>[\s\S]*?<\/image>/gi, '')
-                .replace(/image###([\s\S]*?)###/gi, '')
-                .replace(/[ \t]+\n/g, '\n')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim();
-        };
         const processRegex = (text, options = {}) => {
             if (!text) return '';
             // options: { isDisplay, isPrompt, role, depth }
@@ -3198,31 +2844,6 @@ ${content}
             } catch (e) {
                 console.warn('API Status Check Failed:', e);
                 apiStatus.value = 'error';
-            }
-        };
-
-        const checkImageGenStatus = async () => {
-            imageGenStatus.value = 'checking';
-            try {
-                const controller = new AbortController();
-                const id = setTimeout(() => controller.abort(), 10000);
-                const startTime = performance.now();
-
-                const baseUrl = IMAGE_GEN_BASE_URL;
-
-                await fetch(baseUrl, {
-                    method: 'HEAD',
-                    mode: 'no-cors',
-                    signal: controller.signal
-                });
-                clearTimeout(id);
-                const endTime = performance.now();
-
-                imageGenStatus.value = 'connected';
-                imageGenLatency.value = Math.round(endTime - startTime);
-            } catch (e) {
-                console.warn('Image API Status Check Failed:', e);
-                imageGenStatus.value = 'error';
             }
         };
 
@@ -4077,124 +3698,17 @@ ${content}
 
             // --- Advanced World Info Processing ---
 
-            const evaluatedProbability = new Map(); // Store rolled probabilities to prevent re-rolls
+            const evaluatedProbability = new Map();
 
-            const toNonNegativeNumber = (value, fallback = 0) => {
-                const number = Number(value);
-                return Number.isFinite(number) ? Math.max(0, number) : fallback;
-            };
-
-            const createWorldInfoRegex = (pattern) => {
-                let source = String(pattern || '');
-                let flags = 'i';
-                if (source.startsWith('/') && source.lastIndexOf('/') > 0) {
-                    const lastSlash = source.lastIndexOf('/');
-                    const potentialFlags = source.slice(lastSlash + 1);
-                    if (/^[dgimsuvy]*$/.test(potentialFlags)) {
-                        source = source.slice(1, lastSlash);
-                        flags = potentialFlags;
-                    }
-                }
-                flags = flags.replace(/g/g, '');
-                if (!flags.includes('i')) flags += 'i';
-                if (/\\[pP]\{/.test(source) && !flags.includes('u')) flags += 'u';
-                return new RegExp(source, flags);
-            };
-
-            const worldInfoKeyMatchesText = (entry, key, text) => {
-                const rawKey = String(key || '').trim();
-                const rawText = String(text || '');
-                if (!rawKey || !rawText) return false;
-
-                if (entry.useRegex) {
-                    try {
-                        return createWorldInfoRegex(rawKey).test(rawText);
-                    } catch (e) {
-                        console.warn(`Invalid world info regex: ${rawKey}`);
-                        return false;
-                    }
-                }
-
-                return rawText.toLowerCase().includes(rawKey.toLowerCase());
-            };
-
-            const passesWorldInfoProbability = (entry) => {
-                const probability = Math.min(100, toNonNegativeNumber(entry.probability, 100));
-                if (entry.useProbability !== false && probability < 100) {
-                    if (!evaluatedProbability.has(entry)) {
-                        evaluatedProbability.set(entry, probability > 0 && (Math.random() * 100) < probability);
-                    }
-                    return !!evaluatedProbability.get(entry);
-                }
-                return true;
-            };
-
-            // Helper function to check a single entry against a text block
-            const checkEntryTrigger = (entry, text) => {
-                // Probability Check (do this early, rolled once per entry per generation)
-                if (!passesWorldInfoProbability(entry)) return { triggered: false };
-
-                let primaryMatches = 0;
-                let matchedKeys = [];
-
-                const checkKeys = (keys) => {
-                    let matchCount = 0;
-                    if (!keys || keys.length === 0 || keys.every(k => !k)) return 0;
-
-                    keys.forEach(key => {
-                        const rawKey = String(key || '').trim();
-                        if (!rawKey) return;
-                        if (worldInfoKeyMatchesText(entry, rawKey, text)) {
-                            matchCount++;
-                            if (!matchedKeys.includes(rawKey)) matchedKeys.push(rawKey);
-                        }
-                    });
-                    return matchCount;
-                };
-
-                primaryMatches = checkKeys(entry.keys);
-                if (primaryMatches === 0) return { triggered: false };
-
-                return { triggered: true, score: primaryMatches, matchedKeys };
-            };
-
-            let triggeredEntries = new Map(); // Use Map to store entries and their scores
             const activeWorldInfo = worldInfo.value.filter(e => e.enabled !== false);
-            const postprocessedChatHistory = getPostprocessedChatMessages(chatHistory.value, { includeSystem: false });
 
-            // 1. Initial Scan (Chat History)
-            activeWorldInfo.forEach(entry => {
-                if (entry.constant) {
-                    triggeredEntries.set(entry, { score: Infinity, matchedKeys: ['常驻 (Constant)'] }); // Constants get highest score
-                    return;
-                }
-
-                const rawScanDepth = toNonNegativeNumber(entry.scanDepth ?? worldInfoSettings.scanDepth, 0);
-                const maxScanDepth = toNonNegativeNumber(worldInfoSettings.maxDepth, 0);
-                const entryScanDepth = maxScanDepth > 0 ? Math.min(rawScanDepth, maxScanDepth) : rawScanDepth;
-                if (entryScanDepth === 0 || !entry.keys || entry.keys.length === 0) return;
-
-                const scanText = postprocessedChatHistory.slice(-entryScanDepth).map(m => m.content).join('\n');
-
-                if (entry.keys && entry.keys.length > 0) {
-                    const result = checkEntryTrigger(entry, scanText);
-                    if (result.triggered) {
-                        triggeredEntries.set(entry, { score: result.score, matchedKeys: result.matchedKeys });
-                    }
-                }
+            const { entries: budgetedEntries, entryData: triggeredEntries, groups: wiGroups } = worldInfoEngine.evaluateWorldInfo({
+                activeEntries: activeWorldInfo,
+                chatHistoryMessages: chatHistory.value,
+                worldInfoSettings,
+                probabilityCache: evaluatedProbability,
+                getPostprocessedChatMessages,
             });
-            let finalEntries = Array.from(triggeredEntries.keys());
-
-            // Sort by constant, then order
-            finalEntries.sort((a, b) => {
-                if (a.constant && !b.constant) return -1;
-                if (!a.constant && b.constant) return 1;
-                // Sort descending by order for budget priority (higher order = more important/inserted later = kept if budget tight?)
-                // Docs: "Then entries with higher order numbers." implying they are prioritized after constants.
-                return (b.order || 0) - (a.order || 0);
-            });
-
-            const budgetedEntries = finalEntries;
 
             // --- Output Trigger Log ---
             console.groupCollapsed('📚 World Info Trigger Log');
@@ -4210,26 +3724,6 @@ ${content}
                 });
             }
             console.groupEnd();
-
-            // 5. Group by Position
-            const wiGroups = {
-                system_top: [], global_note: [], before_char: [], after_char: [],
-                user_top: [], assistant_top: [], at_depth: []
-            };
-
-            budgetedEntries.forEach(entry => {
-                const pos = entry.position || 'at_depth';
-                if (wiGroups.hasOwnProperty(pos)) {
-                    wiGroups[pos].push(entry);
-                } else {
-                    wiGroups.at_depth.push(entry);
-                }
-            });
-
-            // Fix: Sort entries within each group by Order (Ascending)
-            Object.keys(wiGroups).forEach(key => {
-                wiGroups[key].sort((a, b) => (a.order || 0) - (b.order || 0));
-            });
 
             // Construct Prompt Parts
             const enabledPresets = presets.value
@@ -4250,7 +3744,6 @@ ${content}
 
             // Helper to join content with comments
             const joinContent = (entries) => entries.map(e => `[${e.comment || 'Entry'}]\n${e.content}`).join('\n\n');
-            const getWorldInfoDisplayName = (entry) => entry.comment || entry.name || '未命名条目';
 
             // Build System Prompt
             let systemPromptParts = [];
@@ -8190,177 +7683,6 @@ ${content}
             });
         };
 
-        const enforceSpecialRules = () => {
-            const imageGenToken = settings.imageGenKey.trim();
-            const baseUrl = IMAGE_GEN_BASE_URL;
-
-            // 1. NAI画图正则 (统一版本)
-            const imageGenRegexName = 'NAI画图正则';
-            const defaultArtists = '[[[artist:dishwasher1910]]], {{yd_(orange_maru)}}, [artist:ciloranko], [artist:sho_(sho_lwlw)], [ningen mame], year 2024,';
-            const comicDoujinArtists = `(masterpiece:1.3), (best quality:1.2), (highres), (absurdres),
-(extremely detailed illustration:1.2), (anime style:1.1),
-
-(artist:feipin zhanshi:1.0), (artist:nlebo-hentai:0.9), (artist:sos adult:0.85),
-(artist:hews:0.4),
-
-(detailed skin texture:1.15), (glossy skin:1.1),
-(thick lineart:1.1), (high contrast:1.15),
-(vivid colors:1.1), (detailed shading:1.15),
-(warm color palette:1.05),
-(cute face:1.1), (detailed eyes:1.15), (detailed face:1.1),`;
-            const r18Artists = "0.9::misaka_12003-gou ::, dino_(dinoartforame), wanke, liduke, year 2025, realistic, 4k, -2::green ::, textless version, The image is highly intricate finished drawn. Only the character's face is in anime style, but their body is in realistic style. 1.35::A highly finished photo-style artwork that has lively color, graphic texture, realistic skin surface, and lifelike flesh with little obliques::. 1.63::photorealistic::, 1.63::photo(medium)::, \\n20::best quality, absurdres, very aesthetic, detailed, masterpiece::,, very aesthetic, masterpiece, no text,";
-            const lolita25dArtists = "0.9::misaka_12003-gou & dino, rurudo,  mignon,wanke & liduk::, year 2025, realistic, 4k, -2::green ::, textless version, The image is highly intricate finished drawn. Only the character's face is in anime style, but their body is in realistic style. 1.35::A highly finished photo-style artwork that has lively color, graphic texture, realistic skin surface, and lifelike flesh with little obliques::. 1.63::photorealistic::, 1.63::photo(medium)::, \\n20::best quality, absurdres, very aesthetic, detailed, masterpiece::,, very aesthetic, masterpiece, no text,";
-            const animeArtists = '1.4::asanagi::,{{{{{artist:asanagi}}}}},1.2::xiaoluo_xl::,1.3::Artist: misaka_12003-gou::,1.2::Artist:shexyo::,0.7::Artist:b.sa_(bbbs)::,1::Artist:qiandaiyiyu::,1.05::artist:natedecock::,1.05::artist:kunaboto::,0.75::artist:kandata_nijou::,1.05::artist:zer0.zer0 ::,1.05::artist:jasony::,0.75::misaka_12003-gou ::, dino_(dinoartforame), wanke, liduke, year 2025, realistic, 4k, -2::green ::, {textless version, The image is highly intricate finished drawn,write realistically,true to life}, 1.35::A highly finished photo-style artwork that has lively color, graphic texture, realistic skin surface, and lifelike flesh with little obliques::, 1.63::photorealistic::,3::age slider::,1.63::photo(medium)::, 2::best quality, absurdres, very aesthetic, detailed, masterpiece::,-4::Muscle definition, abs::';
-            const galgameArtists = 'artist:ningen_mame,, noyu_(noyu23386566),, toosaka asagi,, location,\\n20::best quality, absurdres, very aesthetic, detailed, masterpiece::,:,, very aesthetic, masterpiece, no text,';
-
-            let targetArtists = defaultArtists;
-            if (settings.imageStyle === 'comicDoujin') {
-                targetArtists = comicDoujinArtists;
-            } else if (settings.imageStyle === 'r18') {
-                targetArtists = r18Artists;
-            } else if (settings.imageStyle === 'lolita25d') {
-                targetArtists = lolita25dArtists;
-            } else if (settings.imageStyle === 'anime') {
-                targetArtists = animeArtists;
-            } else if (settings.imageStyle === 'galgame') {
-                targetArtists = galgameArtists;
-            } else if (settings.imageStyle === 'custom') {
-                targetArtists = settings.customImageArtists || '';
-            }
-
-            const encodedTargetArtists = encodeURIComponent(targetArtists);
-            const imageGenRegexContent = {
-                name: imageGenRegexName,
-                regex: '/image###([\\s\\S]*?)###/g',
-                replacement: '<div style="width: auto; height: auto; max-width: 100%; box-sizing: border-box; padding: 2px; border: 1px solid rgba(255,255,255,0.58); background: rgba(255,255,255,0.32); position: relative; border-radius: 12px; overflow: hidden; display: inline-flex; justify-content: center; align-items: center; box-shadow: 0 4px 14px rgba(148,163,184,0.06);"><img src="' + baseUrl + '/generate?tag=$1&token=' + imageGenToken + '&model=nai-diffusion-4-5-full&artist=' + encodedTargetArtists + '&size=' + settings.imageSize + '&steps=40&scale=6&cfg=0&sampler=k_dpmpp_2m_sde&negative={{{{bad anatomy}}}},{bad feet},bad hands,{{{bad proportions}}},{blurry},cloned face,cropped,{{{deformed}}},{{{disfigured}}},error,{{{extra arms}}},{extra digit},{{{extra legs}}},extra limbs,{{extra limbs}},{fewer digits},{{{fused fingers}}},gross proportions,ink eyes,ink hair,jpeg artifacts,{{{{long neck}}}},low quality,{malformed limbs},{{missing arms}},{missing fingers},{{missing legs}},{{{more than 2 nipples}}},mutated hands,{{{mutation}}},normal quality,owres,{{poorly drawn face}},{{poorly drawn hands}},reen eyes,signature,text,{{too many fingers}},{{{ugly}}},username,uta,watermark,worst quality,{{{more than 2 legs}}},awkward hand sign,weird hand gesture,contorted hand,unnatural finger pose,deformed hand gesture,{shaka},{hang loose},{{rock on}},{shaka sign}&nocache=0&noise_schedule=karras"  alt="生成图片" style="max-width: 100%; height: auto; width: auto; display: block; object-fit: contain; border-radius: 9px; transition: transform 0.3s ease;"></div>',
-                placement: [2],
-                markdownOnly: true,
-                promptOnly: false,
-                scope: 'global',
-                enabled: false // Default closed
-            };
-
-            // 查找当前是否已存在新命名的正则
-            const newRegexIndex = regexScripts.value.findIndex(r => r.name === imageGenRegexName);
-
-            if (newRegexIndex !== -1) {
-                // 如果已存在，保留目前的启用状态并更新内容
-                imageGenRegexContent.enabled = regexScripts.value[newRegexIndex].enabled;
-                regexScripts.value.splice(newRegexIndex, 1);
-            }
-
-            // 添加新的到首位
-            regexScripts.value.unshift(imageGenRegexContent);
-
-            // 2. 自动生图世界书
-            const autoImageGenWIName = '自动生图';
-            const imageGenCount = Math.min(6, Math.max(1, Number(settings.imageGenCount) || 2));
-            const autoImageGenWIContent = {
-                comment: autoImageGenWIName,
-                keys: [],
-                content: `<auto_image_gen>\n用户已开启自动生图。每次回复的正文中必须在合适的位置穿插图片，标准格式为：image###生成的提示词###，不能只输出文字正文；本轮必须生成${imageGenCount}张图片。
-使用绘画tag对场景人物进行特写，并保证一个场景拥有${imageGenCount}张图。
-注意:始终使用逗号分隔条目.另外请保证同一角色的特征，如发色，瞳孔颜色，体态，外貌的一致性.
-使用 image###生成的提示词### 的格式！
-注意：如为nsfw场景，生成的提示词必须带上 nsfw 标签；如果是同人/已有作品角色，角色名仍必须放在最前面，nsfw 紧跟其后。
-
-###提示词生成指导:
-第一重要的在于人物的特点,例如：white hair,性别：1girl,1boy,特色：mesugaki,ojousama,服装特色：china_dress,gothic,glasses,表情动作：smile,crying,tearing_clothes,disgust,angry,kubrick_stare,
-第二在于人物姿势：例如基础的站姿：standing,on back,on stomach,kneeling,做事情：bathing,cooking,fighting,showering,sleeping,spitting,walking,toilet_use,性爱姿势：grinding,fingering,licking_penis,
-第三在于动作细节:例如hands_on_own_chest,arms_behind_back,penis_grab,pulled_by_self,skirt_pull,clothes_lift,covering_chest_by_hand,finger_to_mouth,hands_on_lap,
-第四在于环境交互：例如：grinding,fingering,licking_penis,spread legs,wariza,sitting_in_tree,lotus_position,sitting_on_rock,sitting_on_stairs,folded,cameltoe,
-第五在于衣物细节:例如XX半脱，露出XX
-第六在于镜头描写，从XX往XX看，上半身还是下半身，例如从下往上的下半身，从上往下的上半身.lower_body,between_legs,between_breasts,pantyshot,looking_at_viewer,
-第七在于人物此时的位置，例如: diningroom, gym, bedroom, indoors, home, beach
-第八在于当前时间,morning, noon ，night, emphasize the lighting situation..
-
-<Tag_注意事项>
-#  Tag规范：禁用中文；原创角色禁止使用人物卡英文名；同人/已有作品角色必须把官方英文名或常用角色Tag放在提示词最前面
-1. 拆解复合词：【如：月下→moonlight,night】
-2. 排除元素：“no+Tag”明确强调排除，默认绘图“不提及也易生成”的元素【如：穿衣但不穿胸罩→no bra；穿短裙但不穿内裤→no panties】
-
-# 画面限制：仅描述画面中“客观存在的人/物/背景及正在发生的物理动作“，严禁加入人物内心想法、回忆、幻想、预告、计划，及比喻、抽象描述等非视觉化内容
-【如：构图变化：全身→仅下半身→移除"shirt, expression"等上半身Tag】
-【如：人物视线：正面→背对→移除"eye color"等面部Tag→再添加：from behind】
-【如：遮挡视线：脸庞遮盖/蒙眼→移除"eye color"等眼部Tag，添加：face covered/blindfold】
-【如：对话转动作：“你看，我今天穿内裤了。”→撩裙子,可见内裤→lifting skirt,panties】
-</Tag_注意事项>
-
-角色描述 以Character 1 Prompt为示例
-身份：
- - 主体标识：【如：girl、boy、other】
- - 同人角色：提示词第一项必须是英文全名\\\\(作品名\\\\)或常用角色Tag（下划线_替换成空格，/转义为\\\\），再接外貌、服装、动作等Tag
- - 原创角色：名字替换为"original"(也就是人物卡角色)
-特征：
- - 基础特征：发型、发色、瞳色、罩杯
- - 专属特征：年龄、职业、性格、皮肤、种族等
-**特征根据场景和图片的构图智能调整,冲突则临时移除**
-- 互动动作&细节：
-  - 自身【如：hands on own ass、grab own ass、arms behind back、covering chest by hand】
-  - 对方【如：hand on others' chest 、grabbing another's hair 、penis grab、covering another's eyes、princess carry】
-  - 物品【如：holding doorknob、clothes lift、sex toy on floor、bowl in front of girl、dildo in mouth】
-  - 环境【如：partially submerged】
-**同步/非同步：【如：双手举高→raising hands；单手举高→raising hand, hand in pocket】**
-表情:
- - 视线：【如：looking at viewer】
- - 面部：【如：open mouth】
- - 表情：【如：smile、blush】
- - 生理反应：【wet、pussy juice、cum、dripping】
-
-<Tag_智能调整>
-# 个数分配：按”画面视觉占比及焦点”分配动态不同分类的Tag个数
-
-# 排序调整：按”画面视觉占比及焦点”从高到低排序；并将同分类逻辑关联的Tag相邻排列，避免分散
-
-# 权重调整：
-1. 增强权重：{Tag}
- - 功能：突出核心Tag，最多叠加6层（1层≈1.1倍、2层≈1.21倍、6层≈1.77倍）
- - 分配优先级：特征>动作>服饰>表情>特效【如：红发→{{{red hair}}}】
- - 涉及人物特征(如发色，瞳孔颜色等）的提示词请增加权重
-2. 减弱权重：[Tag]
- - 功能：弱化次要Tag或调整幅度，最多叠加2层（1层≈0.9倍、2层≈0.8倍）
- - 分配优先级：调整幅度【如：背景有 “花瓶”→但无需突出→[vase]】
-
- ### 核心一致性规范 (极其重要):
-1. **上下文一致性**：必须精准提取并保留角色当前的外貌，着装状态（如衣服是否破损、脱下）、环境光影、道具位置以及相对姿势。一旦在上文改变了状态，后续生图Tag必须绝对保持一致！
-2. **同人角色/固定外观一致性**：对于特定世界观或同人角色，提示词最前面必须放官方英文名或常用角色Tag，并带上极其准确的专属特征Tag组合。对常驻特征（如特定发型、异色瞳、专属装饰物等）加上最高权重 {{{Tag}}}，避免生成外形崩坏和不一致。
-
-<生成格式>
-image###生成的提示词###
-</生成格式>
-</Tag_智能调整>
-
-特别提示：出现user或主角参与的情况(如被口、手交），禁止出现主角的人物形象(脸部，头部）！必须使用第一视角(POV）相关提示词！且要作为Character  Prompt添加，禁止出现用户/主角名字(包括英文和拼音），中文和{{user}}是明令禁止的；同人角色本人的官方角色名仍按上方规则放在最前面。一定要保持同一人物在上下文中的形象一致性，不要丢失人物特性(如有异色瞳特征人物），涉及人物常见特征(如发色，瞳孔颜色等）的提示词请增加权重\n</auto_image_gen>`,
-                constant: true,
-                enabled: false, // Default closed
-                scope: 'global',
-                position: 'at_depth',
-                depth: 4,
-                order: 100,
-                useProbability: false,
-                probability: 100
-            };
-
-            const wiIndex = worldInfo.value.findIndex(w => w.comment === autoImageGenWIName);
-            if (wiIndex !== -1) {
-                // 存在，保留启用状态并更新内容
-                autoImageGenWIContent.enabled = worldInfo.value[wiIndex].enabled;
-                worldInfo.value.splice(wiIndex, 1);
-            }
-            // 添加新的到首位
-            worldInfo.value.unshift(autoImageGenWIContent);
-
-        };
-
-        watch(() => settings.imageGenKey, () => {
-            enforceSpecialRules();
-            if (isAutoImageGenEnabled.value) {
-                updateImageGenRegexState({ enableRegex: true });
-            }
-            saveData();
-            fetchQuota();
-        });
-
         const prepareLoadedChatHistoryForDisplay = (messages = []) => uiManager.prepareChatHistoryForDisplay(messages);
 
         const selectCharacter = async (index, isNewImport = false) => uiManager.switchToCharacter(index, isNewImport);
@@ -8379,131 +7701,6 @@ image###生成的提示词###
                 reader.readAsDataURL(file);
             }
         };
-
-        // Import/Export Logic
-
-        const normalizeWorldInfoEntry = (entry) => {
-            // Create a merged object from root and extensions for robust parsing
-            // FIX: Extensions should override root properties as they usually contain more specific/updated settings
-            const mergedEntry = { ...entry };
-            const ext = entry.extensions || {};
-            Object.keys(ext).forEach(key => {
-                if (ext[key] !== undefined && ext[key] !== null) {
-                    mergedEntry[key] = ext[key];
-                }
-            });
-            delete mergedEntry.extensions; // Clean up
-
-            // Helper to safely convert values to boolean
-            const toBoolean = (value, defaultValue) => {
-                if (value === undefined || value === null) return defaultValue;
-                if (typeof value === 'string') {
-                    if (value.toLowerCase() === 'false') return false;
-                    if (value.toLowerCase() === 'true') return true;
-                }
-                return !!value;
-            };
-
-            // Helper to safely convert values to number
-            const toNumber = (value, defaultValue) => {
-                if (value === undefined || value === null || value === '') return defaultValue;
-                const num = Number(value);
-                return isNaN(num) ? defaultValue : num;
-            };
-
-            // Normalize keys (ST uses 'keys' array, but some exports might be comma string)
-            // Also handle 'key' (singular) which appears in some exports like the example json
-            let keys = mergedEntry.keys || mergedEntry.key || [];
-            if (typeof keys === 'string') {
-                keys = keys.split(/[,，]/).map(k => k.trim()).filter(Boolean);
-            } else if (!Array.isArray(keys)) {
-                keys = [];
-            }
-
-            // Map ST position to our internal values with improved logic
-            let position = 'at_depth'; // Default
-            const stPos = mergedEntry.position;
-            const validPositions = ['system_top', 'global_note', 'before_char', 'after_char', 'at_depth', 'user_top', 'assistant_top'];
-
-            const posNameMap = {
-                'before_character': 'before_char',
-                'after_character': 'after_char',
-                'character_top': 'before_char',
-                'character_bottom': 'after_char',
-                'before_examples': 'before_char',
-                'after_examples': 'after_char',
-                'example_top': 'before_char',
-                'example_bottom': 'after_char',
-                'an_top': 'global_note',
-                'author_note': 'global_note',
-                'an_bottom': 'global_note'
-            };
-
-            if (typeof stPos === 'string') {
-                let lowerPos = stPos.toLowerCase().replace(/ /g, '_');
-                // Handle standard mappings
-                if (posNameMap[lowerPos]) {
-                    lowerPos = posNameMap[lowerPos];
-                }
-
-                const foundPos = validPositions.find(p => p === lowerPos);
-                if (foundPos) {
-                    position = foundPos;
-                }
-            } else if (typeof stPos === 'number' || (typeof stPos === 'string' && !isNaN(Number(stPos)) && validPositions.indexOf(stPos) === -1)) {
-                const numPos = Number(stPos);
-                // External card standard position mapping
-                // 0: Before Char
-                // 1: After Char
-                // 2: AN Top
-                // 3: AN Bottom
-                // 4: At Depth
-                const posMap = {
-                    0: 'before_char',
-                    1: 'after_char',
-                    2: 'global_note',
-                    3: 'global_note',
-                    4: 'at_depth',
-                };
-                position = posMap[numPos] !== undefined ? posMap[numPos] : 'at_depth';
-            }
-
-            // Explicitly handle mapped fields to ensure extensions override correctly
-            // Extensions often use snake_case while we prefer camelCase or vice versa in some legacy
-            const getValue = (keys, defaultValue) => {
-                for (const key of keys) {
-                    if (mergedEntry[key] !== undefined && mergedEntry[key] !== null) {
-                        return mergedEntry[key];
-                    }
-                }
-                return defaultValue;
-            };
-            return {
-                // --- Basic Info ---
-                comment: getValue(['comment'], ''),
-                content: getValue(['content'], ''),
-                enabled: toBoolean(getValue(['enabled'], true), true) && !toBoolean(getValue(['disable', 'disabled'], false), false),
-                scope: systemWorldInfoNames.includes(getValue(['comment'], '')) || getValue(['scope'], 'character') === 'global' ? 'global' : 'character',
-
-                // --- Keys & Matching ---
-                keys: keys,
-                useRegex: toBoolean(getValue(['use_regex', 'useRegex'], false), false),
-                constant: toBoolean(getValue(['constant'], false), false),
-
-                // --- Position & Order ---
-                position: position,
-                order: toNumber(getValue(['insertion_order', 'order'], 0), 0),
-                depth: toNumber(getValue(['depth'], 4), 4),
-                scanDepth: toNumber(getValue(['scan_depth', 'scanDepth'], null), null),
-                probability: toNumber(getValue(['probability'], 100), 100),
-                useProbability: toBoolean(getValue(['useProbability', 'use_probability'], true), true),
-            };
-        };
-
-        const toWorldInfoExportEntry = (entry) => {
-            const normalized = normalizeWorldInfoEntry(entry);
-            return cardUtils.toWorldInfoExportEntry(normalized);
-        }; // toWorldInfoExportEntry
 
         // ======== StorageService Context & Instantiation (moved after all TDZ dependencies) ========
         const storageContext = {
@@ -10346,16 +9543,7 @@ image###生成的提示词###
             // Auto Image Gen Inquiry
             showAutoImageGenModal,
 
-            setAutoImageGen: (enabled) => {
-                const autoImageGenWIName = '自动生图';
-                const entry = worldInfo.value.find(w => w.comment === autoImageGenWIName);
-                if (entry) {
-                    entry.enabled = enabled;
-                    showToast(enabled ? '自动生图已开启' : '已保持关闭状态', enabled ? 'success' : 'info');
-                }
-                showAutoImageGenModal.value = false;
-                saveData();
-            }
+            setAutoImageGen,
         };
     }
 }).mount('#app');
