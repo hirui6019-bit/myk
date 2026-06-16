@@ -4,7 +4,7 @@
   "description": "My Web App",
   "main": "index.html",
   "scripts": {
-    "build": "mkdir -p dist && rsync -av --exclude='node_modules' --exclude='.git' --exclude='dist' . dist/"
+    "build": "rm -rf dist && mkdir dist && find . -maxdepth 1 ! -name '.' ! -name 'dist' ! -name 'node_modules' ! -name '.git' -exec cp -r {} dist/ \\;"
   },
   "keywords": [],
   "author": "",
