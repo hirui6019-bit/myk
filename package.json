@@ -1,5 +1,7 @@
 {
-  "scripts": {
-    "build": "mkdir -p dist && cp -r . dist"
+  "devDependencies": {
+    "acorn": "^8.17.0"
   }
+"scripts": {
+    "build": "mkdir -p dist && cp -r . dist"
 }
