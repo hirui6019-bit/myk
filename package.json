@@ -1,3 +1,12 @@
-"scripts": {
-  "build": "mkdir -p dist && rsync -av --exclude='node_modules' --exclude='.git' --exclude='dist' . dist/"
+{
+  "name": "myk-project",
+  "version": "1.0.0",
+  "description": "My Web App",
+  "main": "index.html",
+  "scripts": {
+    "build": "mkdir -p dist && rsync -av --exclude='node_modules' --exclude='.git' --exclude='dist' . dist/"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
