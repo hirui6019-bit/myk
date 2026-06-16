@@ -1236,6 +1236,7 @@ export function createUiTemplateManager({
         renderUiTemplateHtml,
         renderEditingUiTemplatePreview,
         handleUiTemplateClick,
+        createExecutableHtmlIframe,
 
         // Context injection
         stripUiTemplateContextInjection,

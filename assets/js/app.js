@@ -1540,6 +1540,7 @@ createApp({
             renderUiTemplateHtml,
             renderEditingUiTemplatePreview,
             handleUiTemplateClick,
+            createExecutableHtmlIframe,
             markUiTemplateStatus,
             stripUiTemplateContextInjection,
             buildUiTemplateContextInjection,
