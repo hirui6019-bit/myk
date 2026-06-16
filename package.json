@@ -1,5 +1,3 @@
-{
-  "scripts": {
-    "build": "mkdir -p dist && cp -r . dist"
-  }
+"scripts": {
+  "build": "mkdir -p dist && rsync -av --exclude='node_modules' --exclude='.git' --exclude='dist' . dist/"
 }
